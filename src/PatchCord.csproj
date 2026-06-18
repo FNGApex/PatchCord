@@ -23,6 +23,12 @@
          advisory that wants them configured the WinForms way. -->
     <NoWarn>$(NoWarn);WFO0003</NoWarn>
 
+    <!-- Allow `dotnet build` on macOS/Linux: resolves the Windows reference packs
+         without changing the TFM or any Windows behavior. The published artifact
+         is still built via publish.ps1 on Windows; a `dotnet publish` on macOS
+         is compile-check only — the binary will not run (WPF/WinForms, net10.0-windows). -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+
     <!-- Single-file, self-contained settings are applied only at publish time
          (see publish.ps1 / the dotnet publish flags) so a plain `dotnet build`
          stays framework-dependent and needs no NuGet runtime packs. The released

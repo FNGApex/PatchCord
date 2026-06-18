@@ -49,6 +49,15 @@ This writes a self-contained `publish\PatchCord.exe` (~66 MB) that runs without 
 separate .NET install. For development: `dotnet build src`, or run
 `PatchCord.exe --selftest` to build the UI and exit.
 
+### Building on macOS
+
+`dotnet build src/PatchCord.csproj` works on macOS for editing and CI — the
+`EnableWindowsTargeting` property in the csproj allows the Windows reference packs to
+resolve on non-Windows hosts. **The resulting binary does not run on macOS**: the TFM
+is `net10.0-windows` and the app depends on WPF and WinForms, which are Windows-only.
+Runnable artifacts come only from a Windows `publish.ps1` run. A `dotnet publish` on
+macOS is a compile-check only — it will not produce a usable application.
+
 ## Notes
 
 - Windows only.
