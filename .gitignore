@@ -13,3 +13,11 @@ openasar.asar
 bin/
 obj/
 publish/
+
+# Apex regenerable caches
+deterministic-signals.md
+health.md
+doc-surfaces.md
+.claude/.scratchpad/
+tmp/
+.worktrees/
