@@ -35,9 +35,9 @@ public partial class MainWindow : Window
 
     public void Initialize(bool startHidden, bool selfTest)
     {
-        _cfg = AppConfig.Load(App.ConfigFile);
-        _stubs["vencord"] = PatchEngine.BuildStubAsar(App.VencordPatcherPath);
-        _stubs["equicord"] = PatchEngine.BuildStubAsar(App.EquicordPatcherPath);
+        _cfg = AppConfig.Load(App.ConfigFile, () => App.Platform.DiscoverInstalls().ToList());
+        _stubs["vencord"] = PatchEngine.BuildStubAsar(App.Platform.VencordPatcherPath);
+        _stubs["equicord"] = PatchEngine.BuildStubAsar(App.Platform.EquicordPatcherPath);
         WarnIfPatcherMissing();
 
         ContentRendered += (_, _) => { try { StatusScroll.ScrollToTop(); } catch { } };
@@ -105,9 +105,9 @@ public partial class MainWindow : Window
 
         BtnStartup.Click += (_, _) =>
         {
-            try { Startup.Set(!Startup.IsEnabled); }
+            try { App.Platform.SetRunAtLogin(!App.Platform.RunAtLoginEnabled); }
             catch (Exception ex) { Log.Write($"Startup toggle failed: {ex.Message}", "WARN"); AddLogLine("Couldn't change the startup setting."); }
-            AddLogLine("Run at startup " + (Startup.IsEnabled ? "ON" : "OFF"));
+            AddLogLine("Run at startup " + (App.Platform.RunAtLoginEnabled ? "ON" : "OFF"));
             UpdateSettingsUi();
         };
 
@@ -238,17 +238,19 @@ public partial class MainWindow : Window
 
     private void DetectBranch(string branch, string label)
     {
-        var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), branch);
-        if (File.Exists(Path.Combine(root, "Update.exe")))
+        // Find among the platform-discovered installs or re-probe via LooksLikeInstall.
+        var discovered = App.Platform.DiscoverInstalls()
+            .FirstOrDefault(i => string.Equals(i.Branch, branch, StringComparison.OrdinalIgnoreCase));
+        if (discovered != null)
         {
-            _cfg.EnsureInstall(branch, branch, root, true, false);
+            _cfg.EnsureInstall(discovered.Name, discovered.Branch, discovered.Path, true, false);
             Save();
             AddLogLine($"Detected {label} and enabled it.");
             InvokeMonitor();
         }
         else
         {
-            AddLogLine($"{label} not found in LOCALAPPDATA.");
+            AddLogLine($"{label} not found.");
             Alert.Show(_cfg, $"{label} was not found.", force: true);
         }
     }
@@ -261,15 +263,12 @@ public partial class MainWindow : Window
         };
         if (dlg.ShowDialog() != WinForms.DialogResult.OK) return;
         var path = dlg.SelectedPath;
-        bool valid = File.Exists(Path.Combine(path, "Update.exe"))
-                     || (Directory.Exists(path) && Directory.GetDirectories(path, "app-*").Length > 0);
-        if (!valid)
+        if (!App.Platform.LooksLikeInstall(path, out var branch))
         {
             AddLogLine($"Not a Discord install: {path}");
             Alert.Show(_cfg, "That folder does not look like a Discord install.", force: true);
             return;
         }
-        var branch = PatchEngine.BranchFromLeaf(path);
         _cfg.EnsureInstall("Custom: " + Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar)), branch, path, true, true);
         Save();
         AddLogLine($"Added custom path: {path}");
@@ -458,14 +457,14 @@ public partial class MainWindow : Window
         sb.AppendLine($"PatchCord v{ver}");
         sb.AppendLine(System.Runtime.InteropServices.RuntimeInformation.OSDescription);
         sb.AppendLine(System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription);
-        sb.AppendLine($"monitoring={(_cfg.MonitoringEnabled ? "on" : "off")}  interval={_cfg.IntervalSeconds}s  openAsar={(_cfg.OpenAsar ? "on" : "off")}  theme={_cfg.Ui.Theme}  runAtStartup={(Startup.IsEnabled ? "on" : "off")}");
+        sb.AppendLine($"monitoring={(_cfg.MonitoringEnabled ? "on" : "off")}  interval={_cfg.IntervalSeconds}s  openAsar={(_cfg.OpenAsar ? "on" : "off")}  theme={_cfg.Ui.Theme}  runAtStartup={(App.Platform.RunAtLoginEnabled ? "on" : "off")}");
         sb.AppendLine($"mods on disk: Vencord={(App.ModInstalled("vencord") ? "yes" : "no")}  Equicord={(App.ModInstalled("equicord") ? "yes" : "no")}  BetterDiscord={(App.ModInstalled("betterdiscord") ? "yes" : "no")}");
         sb.AppendLine();
         sb.AppendLine($"installs ({_cfg.Installs.Count}):");
         foreach (var i in _cfg.Installs)
         {
             InstallState st;
-            try { st = PatchEngine.GetState(i, _cfg.OpenAsar); }
+            try { st = GetInstallState(i, _cfg.OpenAsar); }
             catch { st = new InstallState(false, false, null, null, null, false); }
             sb.AppendLine($"- {i.Name}  mod={ModShort(i.ClientMod)}  {(i.Enabled ? "managed" : "paused")}{(i.Custom ? "  (custom)" : "")}");
             sb.AppendLine($"    {i.Path}");
@@ -529,7 +528,7 @@ public partial class MainWindow : Window
         BtnOpenAsarGlobal.Content = oa ? "On" : "Off";
         BtnOpenAsarGlobal.Background = Theme.Brush(oa ? p.On : p.GhostHover);
         BtnOpenAsarGlobal.Foreground = Theme.Brush(oa ? p.OnText : p.Text);
-        bool su = Startup.IsEnabled;
+        bool su = App.Platform.RunAtLoginEnabled;
         BtnStartup.Content = su ? "On" : "Off";
         BtnStartup.Background = Theme.Brush(su ? p.On : p.GhostHover);
         BtnStartup.Foreground = Theme.Brush(su ? p.OnText : p.Text);
@@ -658,7 +657,7 @@ public partial class MainWindow : Window
         foreach (var inst in _cfg.Installs)
         {
             var captured = inst;
-            var st = _lastStates.TryGetValue(inst.Path, out var s) ? s : PatchEngine.GetState(inst, _cfg.OpenAsar);
+            var st = _lastStates.TryGetValue(inst.Path, out var s) ? s : GetInstallState(inst, _cfg.OpenAsar);
             var row = new InstallRow();
             row.RowRoot.Background = System.Windows.Media.Brushes.Transparent;
             row.RowRoot.BorderBrush = Theme.Brush(p.Border);
@@ -783,6 +782,20 @@ public partial class MainWindow : Window
                 Log.Write($"{i.Name}: {ModLabel(i.ClientMod)} isn't installed yet (install it once).", "WARN");
     }
 
+    /// <summary>
+    /// Compute <see cref="InstallState"/> for <paramref name="inst"/> using the
+    /// active <see cref="IDiscordPlatform"/> to resolve paths and running state.
+    /// </summary>
+    private static InstallState GetInstallState(Install inst, bool checkOpenAsar = false)
+    {
+        var platform = App.Platform;
+        bool running = platform.IsRunning(inst);
+        var resourcesDir = platform.ResolveResourcesDir(inst);
+        var coreAppDir = platform.ResolveCoreAppDir(inst);
+        var versionLabel = platform.AppVersionLabel(inst);
+        return PatchEngine.GetState(running, resourcesDir, coreAppDir, versionLabel, checkOpenAsar);
+    }
+
     private void InvokeMonitor()
     {
         bool wantOpenAsar = _cfg.OpenAsar;
@@ -790,7 +803,7 @@ public partial class MainWindow : Window
         var candidates = new List<(Install inst, string desiredAsar, bool desiredBD, bool needOpenAsar, bool asarChange, bool bdChange)>();
         foreach (var inst in _cfg.Installs)
         {
-            var st = PatchEngine.GetState(inst, wantOpenAsar);
+            var st = GetInstallState(inst, wantOpenAsar);
             states[inst.Path] = st;
             var key = inst.Path;
 
@@ -846,7 +859,7 @@ public partial class MainWindow : Window
         bool recorded = false;
         if (_cfg.MonitoringEnabled && candidates.Count > 0)
         {
-            if (Process.GetProcessesByName("Update").Length > 0)
+            if (candidates.Any(t => App.Platform.IsUpdateInProgress(t.inst)))
             {
                 Log.Write("Discord update in progress; deferring patch.", "WARN");
             }
@@ -858,7 +871,7 @@ public partial class MainWindow : Window
                 {
                     try
                     {
-                        PatchEngine.StopProcesses(c.Branch);
+                        App.Platform.Stop(c);
                         stopped.Add(c);
                         var st = states[c.Path];
                         var resources = st.Resources!;
@@ -867,7 +880,7 @@ public partial class MainWindow : Window
                         // OpenAsar first (underlying asar), then the app.asar client mod on top.
                         if (needOpenAsar)
                         {
-                            OpenAsarEngine.Install(resources);
+                            OpenAsarEngine.Install(resources, App.BaseDir);
                             Log.Write($"{c.Name}: OpenAsar installed.", "OK");
                             changes.Add("OpenAsar");
                         }
@@ -887,7 +900,7 @@ public partial class MainWindow : Window
                         {
                             if (desiredBD)
                             {
-                                BetterDiscordEngine.Inject(appDir, App.BetterDiscordAsarPath);
+                                BetterDiscordEngine.Inject(appDir, App.Platform.BetterDiscordAsarPath);
                                 Log.Write($"{c.Name}: BetterDiscord injected.", "OK");
                                 changes.Add("BetterDiscord");
                             }
@@ -911,9 +924,9 @@ public partial class MainWindow : Window
                 // Always restart Discord if we stopped it, even on a patch failure.
                 foreach (var c in stopped)
                 {
-                    PatchEngine.StartDiscord(c.Path, $"{c.Branch}.exe");
+                    App.Platform.Start(c);
                     Log.Write($"Restarted {c.Name}.", "OK");
-                    _lastStates[c.Path] = PatchEngine.GetState(c, wantOpenAsar);
+                    _lastStates[c.Path] = GetInstallState(c, wantOpenAsar);
                 }
                 foreach (var (c, summary) in done)
                 {

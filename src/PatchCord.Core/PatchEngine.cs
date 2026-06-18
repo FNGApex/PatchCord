@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -54,21 +53,6 @@ public static class PatchEngine
         return ms.ToArray();
     }
 
-    // Highest-versioned app-* folder that has a resources dir.
-    public static DirectoryInfo? GetLatestAppDir(string branchRoot)
-    {
-        if (!Directory.Exists(branchRoot)) return null;
-        return new DirectoryInfo(branchRoot)
-            .GetDirectories("app-*")
-            .Where(d => Directory.Exists(Path.Combine(d.FullName, "resources")))
-            .OrderBy(d =>
-            {
-                return Version.TryParse(d.Name.Length > 4 ? d.Name[4..] : "", out var v)
-                    ? v : new Version(0, 0, 0);
-            })
-            .LastOrDefault();
-    }
-
     public static string BranchFromLeaf(string path)
     {
         var leaf = Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar)).ToLowerInvariant();
@@ -78,25 +62,31 @@ public static class PatchEngine
         return "Discord";
     }
 
-    // OpenAsar is only scanned for when checkOpenAsar is set (it costs a file read).
-    public static InstallState GetState(Install inst, bool checkOpenAsar = false)
+    /// <summary>
+    /// Compute install state from pre-resolved platform values.
+    /// <paramref name="resourcesDir"/> and <paramref name="coreAppDir"/> come from
+    /// <see cref="IDiscordPlatform.ResolveResourcesDir"/> /
+    /// <see cref="IDiscordPlatform.ResolveCoreAppDir"/> respectively.
+    /// <paramref name="running"/> comes from <see cref="IDiscordPlatform.IsRunning"/>.
+    /// </summary>
+    public static InstallState GetState(
+        bool running,
+        string? resourcesDir,
+        string? coreAppDir,
+        string? versionLabel,
+        bool checkOpenAsar = false)
     {
-        bool running = Process.GetProcessesByName(inst.Branch).Length > 0;
-        var appDir = GetLatestAppDir(inst.Path);
         bool patched = false, openAsar = false, bd = false;
         string asarMod = "none";
-        string? appName = null, resources = null, appDirPath = null;
-        if (appDir != null)
+        bool installed = resourcesDir != null && coreAppDir != null;
+        if (installed)
         {
-            appName = appDir.Name;
-            appDirPath = appDir.FullName;
-            resources = Path.Combine(appDir.FullName, "resources");
-            patched = File.Exists(Path.Combine(resources, "_app.asar"));
-            asarMod = DetectMod(resources);
-            bd = BetterDiscordEngine.IsInjected(appDir.FullName);
-            if (checkOpenAsar) openAsar = OpenAsarEngine.IsInstalled(resources);
+            patched = File.Exists(Path.Combine(resourcesDir!, "_app.asar"));
+            asarMod = DetectMod(resourcesDir!);
+            bd = BetterDiscordEngine.IsInjected(coreAppDir!);
+            if (checkOpenAsar) openAsar = OpenAsarEngine.IsInstalled(resourcesDir!);
         }
-        return new InstallState(running, patched, appName, resources, appDirPath, appDir != null, openAsar, asarMod, bd);
+        return new InstallState(running, patched, versionLabel, resourcesDir, coreAppDir, installed, openAsar, asarMod, bd);
     }
 
     // Which mod the current stub points at: none / vencord / equicord / other.
@@ -138,23 +128,6 @@ public static class PatchEngine
         File.Move(bak, appAsar);
     }
 
-    public static void StopProcesses(string processName)
-    {
-        var procs = Process.GetProcessesByName(processName);
-        if (procs.Length == 0) return;
-        Log.Write($"Stopping {procs.Length} '{processName}' process(es) to patch.");
-        foreach (var p in procs)
-        {
-            try { p.Kill(); } catch { }
-        }
-        for (int i = 0; i < 50; i++)
-        {
-            Thread.Sleep(200);
-            if (Process.GetProcessesByName(processName).Length == 0) break;
-        }
-        Thread.Sleep(300);
-    }
-
     // Throws if app.asar is missing or already patched.
     public static void Patch(string resourcesDir, byte[] stubBytes)
     {
@@ -177,17 +150,5 @@ public static class PatchEngine
             }
             throw;
         }
-    }
-
-    public static void StartDiscord(string branchRoot, string exeName)
-    {
-        var update = Path.Combine(branchRoot, "Update.exe");
-        if (!File.Exists(update)) return;
-        Process.Start(new ProcessStartInfo
-        {
-            FileName = update,
-            Arguments = $"--processStart {exeName}",
-            UseShellExecute = false,
-        });
     }
 }

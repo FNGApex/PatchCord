@@ -54,10 +54,11 @@ public static class OpenAsarEngine
     }
 
     // Backs up the underlying asar to app.asar.backup and writes OpenAsar in its place.
-    // Discord must be stopped first.
-    public static void Install(string resourcesDir)
+    // Discord must be stopped first. <paramref name="cacheDir"/> is the directory
+    // where openasar.asar is cached (typically beside the running exe).
+    public static void Install(string resourcesDir, string cacheDir)
     {
-        var bytes = GetOpenAsarBytes();
+        var bytes = GetOpenAsarBytes(cacheDir);
         var asar = UnderlyingAsar(resourcesDir);
         if (!File.Exists(asar)) throw new FileNotFoundException($"No asar to back up in {resourcesDir}");
 
@@ -80,18 +81,19 @@ public static class OpenAsarEngine
     }
 
     // --openasar-test hook: downloads OpenAsar, writes it, reports whether detection works.
-    public static string TestFetchAndDetect(string resourcesDir)
+    public static string TestFetchAndDetect(string resourcesDir, string cacheDir)
     {
         Directory.CreateDirectory(resourcesDir);
-        var bytes = GetOpenAsarBytes();
+        var bytes = GetOpenAsarBytes(cacheDir);
         File.WriteAllBytes(Path.Combine(resourcesDir, "app.asar"), bytes);
         return $"downloaded={bytes.Length} bytes; detected={IsInstalled(resourcesDir)}";
     }
 
     // Cached locally for 12h; falls back to a stale cache if the download fails.
-    private static byte[] GetOpenAsarBytes()
+    // <paramref name="cacheDir"/> is the directory where openasar.asar is stored.
+    private static byte[] GetOpenAsarBytes(string cacheDir)
     {
-        var cache = Path.Combine(App.BaseDir, "openasar.asar");
+        var cache = Path.Combine(cacheDir, "openasar.asar");
         bool cacheFresh = File.Exists(cache) &&
             (DateTime.UtcNow - File.GetLastWriteTimeUtc(cache)) < CacheTtl;
         if (cacheFresh) return File.ReadAllBytes(cache);

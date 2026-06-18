@@ -1,28 +1,25 @@
 using System.IO;
-using System.Threading;
 using System.Windows;
 
 namespace PatchCord;
 
 public partial class App : System.Windows.Application
 {
-    private Mutex? _mutex;
-
     // Folder the exe lives in; config and log sit beside it.
     public static string BaseDir { get; private set; } = AppContext.BaseDirectory;
     public static string ConfigFile { get; private set; } = "config.json";
-    public static string VencordPatcherPath { get; private set; } = "";
-    public static string EquicordPatcherPath { get; private set; } = "";
-    public static string BetterDiscordAsarPath { get; private set; } = "";
+
+    // The active platform implementation — available after OnStartup.
+    public static IDiscordPlatform Platform { get; private set; } = null!;
 
     public static string PatcherPathFor(string mod) =>
-        mod == "equicord" ? EquicordPatcherPath : VencordPatcherPath;
+        mod == "equicord" ? Platform.EquicordPatcherPath : Platform.VencordPatcherPath;
 
     public static bool ModInstalled(string mod) => mod switch
     {
-        "vencord" => System.IO.File.Exists(VencordPatcherPath),
-        "equicord" => System.IO.File.Exists(EquicordPatcherPath),
-        "betterdiscord" => System.IO.File.Exists(BetterDiscordAsarPath),
+        "vencord" => System.IO.File.Exists(Platform.VencordPatcherPath),
+        "equicord" => System.IO.File.Exists(Platform.EquicordPatcherPath),
+        "betterdiscord" => System.IO.File.Exists(Platform.BetterDiscordAsarPath),
         _ => true, // "none"
     };
 
@@ -38,32 +35,6 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        // --openasar-test <dir>: fetches OpenAsar and checks detection
-        if (e.Args.Length == 2 && e.Args[0] == "--openasar-test")
-        {
-            BaseDir = AppContext.BaseDirectory;
-            Log.FilePath = Path.Combine(BaseDir, "patchcord.log");
-            string outcome;
-            try { outcome = OpenAsarEngine.TestFetchAndDetect(e.Args[1]); }
-            catch (Exception ex) { outcome = "ERROR: " + ex.Message; }
-            File.WriteAllText(Path.Combine(e.Args[1], "result.txt"), outcome);
-            Shutdown();
-            return;
-        }
-
-        // --bd-test <appDir>: dry-runs BD detection/injection without touching anything
-        if (e.Args.Length == 2 && e.Args[0] == "--bd-test")
-        {
-            var ad = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var asar = Path.Combine(ad, "BetterDiscord", "data", "betterdiscord.asar");
-            string outcome;
-            try { outcome = BetterDiscordEngine.DryRun(e.Args[1], asar); }
-            catch (Exception ex) { outcome = "ERROR: " + ex.Message; }
-            File.WriteAllText(Path.Combine(Path.GetTempPath(), "bd_test.txt"), outcome);
-            Shutdown();
-            return;
-        }
-
         // Set up paths relative to the exe.
         BaseDir = AppContext.BaseDirectory;
         Log.FilePath = Path.Combine(BaseDir, "patchcord.log");
@@ -73,19 +44,42 @@ public partial class App : System.Windows.Application
             ?? Path.Combine(appData, "Vencord");
         var equicordBase = Environment.GetEnvironmentVariable("EQUICORD_USER_DATA_DIR")
             ?? Path.Combine(appData, "Equicord");
-        VencordPatcherPath = Path.Combine(vencordBase, "dist", "patcher.js");
-        EquicordPatcherPath = Path.Combine(equicordBase, "dist", "patcher.js");
+        var vencordPatcherPath = Path.Combine(vencordBase, "dist", "patcher.js");
+        var equicordPatcherPath = Path.Combine(equicordBase, "dist", "patcher.js");
         // BD puts its asar in %APPDATA%\BetterDiscord\data
-        BetterDiscordAsarPath = Path.Combine(appData, "BetterDiscord", "data", "betterdiscord.asar");
+        var betterDiscordAsarPath = Path.Combine(appData, "BetterDiscord", "data", "betterdiscord.asar");
+
+        Platform = new WindowsDiscordPlatform(vencordPatcherPath, equicordPatcherPath, betterDiscordAsarPath);
+
+        // --openasar-test <dir>: fetches OpenAsar and checks detection
+        if (e.Args.Length == 2 && e.Args[0] == "--openasar-test")
+        {
+            string outcome;
+            try { outcome = OpenAsarEngine.TestFetchAndDetect(e.Args[1], BaseDir); }
+            catch (Exception ex) { outcome = "ERROR: " + ex.Message; }
+            File.WriteAllText(Path.Combine(e.Args[1], "result.txt"), outcome);
+            Shutdown();
+            return;
+        }
+
+        // --bd-test <appDir>: dry-runs BD detection/injection without touching anything
+        if (e.Args.Length == 2 && e.Args[0] == "--bd-test")
+        {
+            string outcome;
+            try { outcome = BetterDiscordEngine.DryRun(e.Args[1], Platform.BetterDiscordAsarPath); }
+            catch (Exception ex) { outcome = "ERROR: " + ex.Message; }
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "bd_test.txt"), outcome);
+            Shutdown();
+            return;
+        }
 
         bool tray = e.Args.Any(a => a.TrimStart('-', '/').Equals("tray", StringComparison.OrdinalIgnoreCase));
         bool selfTest = e.Args.Any(a => a.TrimStart('-', '/').Equals("selftest", StringComparison.OrdinalIgnoreCase));
 
-        // Single instance mutex (skipped for --selftest).
+        // Single instance check via platform (skipped for --selftest).
         if (!selfTest)
         {
-            _mutex = new Mutex(initiallyOwned: false, "Global\\PatchCordApp");
-            if (!_mutex.WaitOne(0))
+            if (!Platform.TryAcquireSingleInstance())
             {
                 Log.Write("App already running. Exiting.", "WARN");
                 Shutdown();
@@ -121,7 +115,6 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        try { _mutex?.ReleaseMutex(); } catch { }
         base.OnExit(e);
     }
 }

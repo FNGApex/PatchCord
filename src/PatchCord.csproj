@@ -61,4 +61,14 @@
     <Resource Include="fonts\*.ttf" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="PatchCord.Core\PatchCord.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Exclude the Core sub-project files from this project's compile glob.
+       They are referenced via ProjectReference above, not compiled inline. -->
+  <ItemGroup>
+    <Compile Remove="PatchCord.Core\**" />
+  </ItemGroup>
+
 </Project>

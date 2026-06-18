@@ -44,6 +44,9 @@ public sealed class AppConfig
 
     public static readonly List<string> ClientMods = new() { "vencord", "equicord", "betterdiscord", "none" };
 
+    // Known theme keys — must stay in sync with Theme.Keys in the Windows/Mac shell.
+    private static readonly HashSet<string> KnownThemes = new() { "Discord", "Dark", "Light", "HighContrast" };
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         WriteIndented = true,
@@ -53,7 +56,12 @@ public sealed class AppConfig
     public static readonly string[] Branches =
         { "Discord", "DiscordPTB", "DiscordCanary", "DiscordDevelopment" };
 
-    public static AppConfig Load(string path)
+    /// <summary>
+    /// Load config from <paramref name="path"/>. On first run (no file), calls
+    /// <paramref name="discoverInstalls"/> to populate the initial install list.
+    /// If <paramref name="discoverInstalls"/> is null, first-run config starts empty.
+    /// </summary>
+    public static AppConfig Load(string path, Func<List<Install>>? discoverInstalls = null)
     {
         AppConfig cfg;
         if (File.Exists(path))
@@ -65,12 +73,12 @@ public sealed class AppConfig
             catch (Exception ex)
             {
                 Log.Write($"Bad config, recreating: {ex.Message}", "WARN");
-                cfg = FirstRun();
+                cfg = FirstRun(discoverInstalls);
             }
         }
         else
         {
-            cfg = FirstRun();
+            cfg = FirstRun(discoverInstalls);
         }
 
         cfg.EnsureDefaults();
@@ -78,29 +86,17 @@ public sealed class AppConfig
         return cfg;
     }
 
-    private static AppConfig FirstRun()
+    private static AppConfig FirstRun(Func<List<Install>>? discoverInstalls)
     {
         // First launch: enable Discord by default, leave others off.
         var cfg = new AppConfig();
-        foreach (var d in FindStandardInstalls())
+        var found = discoverInstalls?.Invoke() ?? new List<Install>();
+        foreach (var d in found)
         {
             d.Enabled = d.Branch == "Discord";
             cfg.Installs.Add(d);
         }
         return cfg;
-    }
-
-    public static List<Install> FindStandardInstalls()
-    {
-        var found = new List<Install>();
-        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        foreach (var b in Branches)
-        {
-            var root = System.IO.Path.Combine(local, b);
-            if (File.Exists(System.IO.Path.Combine(root, "Update.exe")))
-                found.Add(new Install { Name = b, Branch = b, Path = root, Custom = false });
-        }
-        return found;
     }
 
     private void EnsureDefaults()
@@ -110,7 +106,7 @@ public sealed class AppConfig
         if (IntervalSeconds < 5) IntervalSeconds = 5;
         if (NotifyStyles.IndexOf(Ui.NotifyStyle) < 0) Ui.NotifyStyle = "bar";
         if (Ui.NotifyScale <= 0) Ui.NotifyScale = 1.0;
-        if (!Theme.Palettes.ContainsKey(Ui.Theme)) Ui.Theme = "Dark";
+        if (!KnownThemes.Contains(Ui.Theme)) Ui.Theme = "Dark";
 
         ClientMod = (ClientMod ?? "vencord").ToLowerInvariant();
         if (!ClientMods.Contains(ClientMod)) ClientMod = "vencord";
