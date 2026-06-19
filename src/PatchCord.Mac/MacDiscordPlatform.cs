@@ -278,12 +278,12 @@ internal sealed class MacDiscordPlatform : IDiscordPlatform
         if (enabled)
         {
             // Resolve the binary path from the running process.
-            // TODO (B4): repoint this to the .app bundle executable once the bundle is packaged.
-            //   The correct path for a released build is:
-            //     <bundle>.app/Contents/MacOS/PatchCord
-            //   At runtime: walk up from Environment.ProcessPath until we find a "*.app" ancestor,
-            //   then construct Contents/MacOS/<CFBundleExecutable>. For now (dev build / no bundle)
-            //   we use the raw executable path which is correct for dev launches.
+            // When running as the packaged .app, Environment.ProcessPath resolves to
+            //   …/PatchCord.app/Contents/MacOS/PatchCord
+            // which is exactly the CFBundleExecutable path launchctl needs (design §12).
+            // Verified in B4: `ps aux` shows the bundle exe path, not a dotnet/dll path.
+            // For dev builds (dotnet run / no bundle) the raw path is used, which is
+            // also correct for that launch context.
             var exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "";
             Directory.CreateDirectory(LaunchAgentDir);
             var plist = $"""
