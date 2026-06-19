@@ -1,7 +1,16 @@
 # HANDOFF — macOS UI polish (Phase U)
 
-**Status as of 2026-06-19: U1–U5 + U6.1/U6.2 DONE. Only U6.3 (manual visual gate, user-run) remains.
-Branch `feat/macos-port`, local commits only (NOT pushed, by user's standing preference).**
+**Status as of 2026-06-19: PHASE U COMPLETE — U1–U6 DONE, U6.3 visual gate signed off by the user
+on the packaged PatchCord.app. Five live-test bugs (B1–B5) also fixed in the same pass (commit
+ebddc88). Branch `feat/macos-port`, local commits only (NOT pushed, by user's standing preference).**
+
+Live-test fixes (B1–B5, all user-confirmed): per-install mod dropdown wired (MenuFlyout +
+SetInstallMod); mod-missing CTA reflects the missing mod + opens its install page; window close
+hides to the menu-bar tray instead of quitting (ShutdownMode=OnExplicitShutdown + Closing→Hide);
+row picker syncs the Options selection; macOS first-run default mod = BetterDiscord. See the spec
+change log. Open item: live patching into /Applications/Discord.app needs the host app's one-time
+macOS App Management grant (per-app) — the terminal was granted during a manual Discord cleanup;
+PatchCord.app needs its own grant.
 
 Goal: polish the macOS Avalonia shell (`src/PatchCord.Mac/*`) to look clean and true to the
 Windows 11 reference (`docs/status.png`, `docs/options.png`). POLISH not overhaul — keep the

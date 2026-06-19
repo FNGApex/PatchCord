@@ -1,6 +1,6 @@
 # Spec — macOS (Avalonia) UI polish
 
-Status: U1–U5 + U6.1/U6.2 DONE; U6.3 (manual visual gate) awaiting user (branch feat/macos-port) · Date: 2026-06-19
+Status: COMPLETE — U1–U6 DONE incl. U6.3 manual visual gate (branch feat/macos-port) · Date: 2026-06-19
 
 > Polish pass on the macOS Avalonia shell (`src/PatchCord.Mac/*`) to match the shipped Windows 11
 > reference UI (`docs/status.png`, `docs/options.png`). Keep the two-tab structure and the
@@ -38,7 +38,7 @@ Locked decisions (design §6, §7):
 | U3 | **Section-label / text color pass.** Give every section-label `TextBlock` `Foreground="{DynamicResource Sub}"` and every value/description label its correct `Sub`/`Text` brush in `MainWindow.axaml` (Monitoring, Discord installs, Recent patches, Client mod + its description, OpenAsar, Startup, Permissions, Check interval, Appearance & notifications, Theme, Notification style, slider readouts). Remove now-redundant `Foreground` repaints from `ApplyPalette()` where DynamicResource covers them. Match the reference's gray section labels. | `src/PatchCord.Mac/MainWindow.axaml`, `MainWindow.axaml.cs` | `dotnet run --project src/PatchCord.Mac -- --mac-uitest` (new U6.2 label-brush assertion PASS); `dotnet build PatchCord.sln -p:EnableWindowsTargeting=true` (3/3) | DONE (538ac40) |
 | U4 | **Fix blank-until-refresh + responsive toggles (design §5b).** Populate the first full UI from a window-realized hook instead of synchronously pre-show: either `Show()` the window before `Initialize()` in `App.OnFrameworkInitializationCompleted` (`App.axaml.cs:44-46`), or move the first `BuildInstallRows()` + `UpdateStatusUi()` + `UpdateOptionsUi()` + `SwitchTab` into the `MainWindow.Opened`/`Loaded` handler (or a single `Dispatcher.UIThread.Post`). Confirm install rows + badges render and toggles/buttons respond on first paint with NO manual Refresh. Delete the dead `RefreshState()` (`InstallRowViewModel.cs:68`) OR leave it (do not wire a new path) — pick deletion to avoid dead code. Keep `RebuildInstallRows()` as the populate path. | `src/PatchCord.Mac/App.axaml.cs`, `MainWindow.axaml.cs`, `InstallRowViewModel.cs` | `dotnet run --project src/PatchCord.Mac -- --mac-uitest` (new U6.1 first-paint assertion: rows>0 + a representative toggle has its palette brush, with NO Refresh call) PASS; manual = toggles work before any Refresh (U6.3) | DONE (6ddeb28) |
 | U5 | **InstallRow / badges.** Apply the U1 ghost-pill (mod button) + green-pill (Managed toggle, W96 H30 r5 On bg white text) ControlThemes so hover/press stop flipping to Fluent grey. Ensure badges use the `On` brush key (CornerRadius 4, Padding 8,3, 10px Bold white) and the row divider uses the `Border` brush key (replace the hard-coded `#3A3C42` at `InstallRow.axaml:5`). Match the reference badge/pill look across all 4 themes. | `src/PatchCord.Mac/InstallRow.axaml`, `InstallRow.axaml.cs` | `dotnet run --project src/PatchCord.Mac -- --mac-uitest` (theme-cycle + row-render still PASS); `dotnet build PatchCord.sln -p:EnableWindowsTargeting=true` (3/3) | DONE (6ddeb28) |
-| U6 | **Build-green + uitest assertions + manual visual gate.** (U6.1) Extend `--mac-uitest` (`MainWindow.axaml.cs` `ReportUiTestInfo`/`RunB3UiTests`) to assert install rows populate at first paint without a manual Refresh (count>0). (U6.2) Assert representative controls/labels resolve a palette brush, not the Fluent default — read back e.g. `BtnToggle.Background` == expected `On`/`Accent` brush and a section label `.Foreground` == `Sub`. (U6.3) **MANUAL VISUAL PASS (the one human step — like B5.3):** launch `PatchCord.app`, eyeball Status + Options vs `docs/status.png`/`docs/options.png`: wordmark clear of traffic lights, gray section labels, green pills, selected mod-card border, button hover/press, all 4 themes. | `src/PatchCord.Mac/MainWindow.axaml.cs` (uitest asserts only) | `dotnet build PatchCord.sln -p:EnableWindowsTargeting=true` (3/3, 0 err) + `dotnet build src/PatchCord.Core/PatchCord.Core.csproj` (flag-free) + `dotnet run --project src/PatchCord.Mac -- --mac-uitest` (all asserts PASS, exit 0) + **manual** visual pass U6.3 | U6.1/U6.2 DONE (23aa9ff); U6.3 MANUAL — awaiting user |
+| U6 | **Build-green + uitest assertions + manual visual gate.** (U6.1) Extend `--mac-uitest` (`MainWindow.axaml.cs` `ReportUiTestInfo`/`RunB3UiTests`) to assert install rows populate at first paint without a manual Refresh (count>0). (U6.2) Assert representative controls/labels resolve a palette brush, not the Fluent default — read back e.g. `BtnToggle.Background` == expected `On`/`Accent` brush and a section label `.Foreground` == `Sub`. (U6.3) **MANUAL VISUAL PASS (the one human step — like B5.3):** launch `PatchCord.app`, eyeball Status + Options vs `docs/status.png`/`docs/options.png`: wordmark clear of traffic lights, gray section labels, green pills, selected mod-card border, button hover/press, all 4 themes. | `src/PatchCord.Mac/MainWindow.axaml.cs` (uitest asserts only) | `dotnet build PatchCord.sln -p:EnableWindowsTargeting=true` (3/3, 0 err) + `dotnet build src/PatchCord.Core/PatchCord.Core.csproj` (flag-free) + `dotnet run --project src/PatchCord.Mac -- --mac-uitest` (all asserts PASS, exit 0) + **manual** visual pass U6.3 | DONE — U6.1/U6.2 (23aa9ff); U6.3 visual pass confirmed by user on PatchCord.app |
 
 ### Phase U Out of scope
 - Full XAML data-binding / MVVM commands (keep imperative code-behind + VM).
@@ -53,6 +53,19 @@ Locked decisions (design §6, §7):
 
 ## Change log
 
+- 2026-06-19 — **Phase U COMPLETE — U6.3 visual pass confirmed + live-test bug fixes (ebddc88).**
+  User ran the packaged `PatchCord.app` against a freshly-cleaned Discord and signed off on the
+  visual gate (wordmark, gray labels, green pills, mod-card border, hover/press, all 4 themes).
+  Live testing surfaced five functional bugs (outside the original U-scope but fixed in the same
+  pass, all user-confirmed): **B1** per-install mod dropdown was decorative → wired a MenuFlyout +
+  `MainViewModel.SetInstallMod`; **B2** mod-missing CTA hardcoded "Get Vencord" + dead → label now
+  reflects the missing mod and opens its install page; **B3** macOS window close quit the whole app
+  → `ShutdownMode=OnExplicitShutdown` + `Closing`→hide-to-tray (App.Quit sets `IsQuitting`);
+  **B4** row picker didn't sync the Options selection → `SetInstallMod` syncs the global default +
+  repaints Options; **B5** first-run defaulted to Core's `vencord` → macOS first-run default is now
+  BetterDiscord (Vencord/Equicord parked on mac). Verified: sln 3/3, `--mac-uitest` U1/U6.1/U6.2
+  PASS + clean auto-close under the new ShutdownMode. NOTE: live patching into `/Applications/
+  Discord.app` requires the host app's one-time macOS **App Management** grant (per-app).
 - 2026-06-19 — **U4 + U5 + U6.1/U6.2 DONE; only the U6.3 manual visual gate remains.** Iter C
   (commit 6ddeb28): **U4** — moved the first full render (`ApplyPalette`/`UpdateStatusUi`/
   `UpdateOptionsUi`/`BuildInstallRows`/`SwitchTab`/`SetMonitorTimer`/`ReportUiTestInfo`) out of
