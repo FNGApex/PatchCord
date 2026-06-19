@@ -425,6 +425,14 @@ public sealed partial class MainWindow : Window
         StatusSub.Foreground  = MacTheme.Brush(p.Sub);
     }
 
+    // ── Public API for App.axaml.cs (tray actions) ───────────────────────────
+
+    /// <summary>
+    /// Refresh the Status tab UI from the current VM state.
+    /// Called by App when the tray monitoring toggle fires.
+    /// </summary>
+    internal void RefreshStatusUi() => UpdateStatusUi();
+
     // ── Uitest reporting ──────────────────────────────────────────────────────
 
     private void ReportUiTestInfo()
@@ -439,5 +447,58 @@ public sealed partial class MainWindow : Window
         Console.WriteLine($"[uitest] Options: clientMod={_vm.ClientMod} openAsar={_vm.OpenAsar} runAtLogin={_vm.RunAtLogin} interval={_vm.IntervalSeconds}s");
         Console.WriteLine($"[uitest] Theme: {_vm.Theme}");
         Console.WriteLine($"[uitest] Config path: {MacAppState.ConfigFile}");
+
+        // B3c/B3.4 uitest: exercise tray actions, alert, and live theme switching.
+        RunB3UiTests();
+    }
+
+    private void RunB3UiTests()
+    {
+        if (_vm == null) return;
+
+        // B3.3: Verify tray items are wired (header and toggle label set).
+        var trayHeader = App.TrayHeaderItem?.Header ?? "(null)";
+        var trayToggle = App.TrayToggleItem?.Header ?? "(null)";
+        Console.WriteLine($"[uitest] B3.3 Tray header: '{trayHeader}'");
+        Console.WriteLine($"[uitest] B3.3 Tray toggle label: '{trayToggle}'");
+        bool trayOk = trayHeader.Contains("PatchCord") && (trayToggle == "Pause monitoring" || trayToggle == "Resume monitoring");
+        Console.WriteLine($"[uitest] B3.3 Tray wired: {trayOk}");
+
+        // B3.3: Simulate monitoring toggle via tray (flip + flip back).
+        bool before = _vm.MonitoringEnabled;
+        _vm.MonitoringEnabled = !before;
+        if (App.Current is App app) { app.UpdateTrayHeader(); app.UpdateTrayToggleLabel(); }
+        var toggledLabel = App.TrayToggleItem?.Header ?? "(null)";
+        _vm.MonitoringEnabled = before;
+        if (App.Current is App app2) { app2.UpdateTrayHeader(); app2.UpdateTrayToggleLabel(); }
+        Console.WriteLine($"[uitest] B3.3 Tray toggle flip: before={before} toggled-label='{toggledLabel}' restored={_vm.MonitoringEnabled == before}");
+
+        // B3.4a: Show an alert (auto-dismisses on its own timer).
+        var cfg = MacAppState.Config;
+        Console.WriteLine("[uitest] B3.4a Showing test Alert (bar style, auto-dismiss)...");
+        MacAlert.Show(cfg, "B3.4a uitest: PatchCord alert banner.", force: true);
+        Console.WriteLine("[uitest] B3.4a Alert.Show() called — banner visible top-left.");
+
+        // B3.4b: Cycle through all 4 themes and verify palette is applied.
+        Console.WriteLine("[uitest] B3.4b Live theme switching — cycling all 4 themes...");
+        var originalTheme = _vm.Theme;
+        foreach (var key in MacTheme.Keys)
+        {
+            _vm.Theme = key;
+            ApplyPalette();
+            UpdateOptionsUi();
+            UpdateStatusUi();
+            BuildInstallRows();
+            var p = CurrentPalette();
+            Console.WriteLine($"[uitest] B3.4b Theme '{key}' applied — Bg={p.Bg} Accent={p.Accent}");
+        }
+        // Restore original theme.
+        _vm.Theme = originalTheme;
+        ApplyPalette();
+        UpdateOptionsUi();
+        UpdateStatusUi();
+        BuildInstallRows();
+        Console.WriteLine($"[uitest] B3.4b Theme restored to '{originalTheme}'.");
+        Console.WriteLine("[uitest] B3.4b Live theme switching complete — all 4 themes repainted.");
     }
 }

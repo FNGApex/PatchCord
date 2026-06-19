@@ -7,14 +7,23 @@
         <FluentTheme />
     </Application.Styles>
 
-    <!-- Tray icon with a Quit item — proves the macOS NSStatusItem path (B3a). -->
+    <!-- Tray icon — macOS NSStatusItem. Menu actions wired in App.axaml.cs. -->
     <TrayIcon.Icons>
         <TrayIcons>
             <TrayIcon Icon="/Assets/tray-icon.png"
                       ToolTipText="PatchCord">
                 <TrayIcon.Menu>
                     <NativeMenu>
+                        <!-- Header status line (disabled label, updated in code) -->
                         <NativeMenuItem Header="PatchCord" IsEnabled="False" />
+                        <NativeMenuItemSeparator />
+                        <!-- Show the main window -->
+                        <NativeMenuItem Header="Open PatchCord" />
+                        <!-- Pause / Resume monitoring (label toggled in code) -->
+                        <NativeMenuItem Header="Pause monitoring" />
+                        <NativeMenuItemSeparator />
+                        <!-- Test notification affordance -->
+                        <NativeMenuItem Header="Test notification" />
                         <NativeMenuItemSeparator />
                         <NativeMenuItem Header="Quit" />
                     </NativeMenu>
