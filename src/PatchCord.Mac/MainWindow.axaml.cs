@@ -604,6 +604,9 @@ public sealed partial class MainWindow : Window
         // and BtnToggle carries the expected ControlTheme key.
         RunU1UiTests();
 
+        // U4/U5 uitest: verify first-paint row population (no Refresh) and palette brush wiring.
+        RunU4U5UiTests();
+
         // B3c/B3.4 uitest: exercise tray actions, alert, and live theme switching.
         RunB3UiTests();
     }
@@ -635,6 +638,79 @@ public sealed partial class MainWindow : Window
 
         bool u1Pass = missing == 0 && toggleOk && fontOk;
         Console.WriteLine($"[uitest] U1 PASS: {u1Pass}");
+    }
+
+    private void RunU4U5UiTests()
+    {
+        if (_vm == null) return;
+
+        // ── U6.1 — first-paint rows populated, no Refresh ────────────────────
+        // NOTE: RefreshInstallRows()/BtnRefresh.Click was NOT invoked on this path.
+        // RenderInitial() calls BuildInstallRows() before ReportUiTestInfo(), so
+        // the visual tree is already populated here purely from the Opened hook.
+
+        int installRowCount = 0;
+        bool placeholderPresent = false;
+        foreach (var child in InstallList.Children)
+        {
+            if (child is InstallRow)
+                installRowCount++;
+            else if (child is TextBlock)
+                placeholderPresent = true;
+        }
+
+        bool hasChildren = InstallList.Children.Count > 0;
+        bool u61Pass;
+        if (_vm.Installs.Count > 0)
+            // VM has installs → expect rendered InstallRow controls (not just a placeholder).
+            u61Pass = _firstRenderDone && installRowCount > 0;
+        else
+            // VM has no installs → expect the "no installs" TextBlock placeholder.
+            u61Pass = _firstRenderDone && placeholderPresent;
+
+        Console.WriteLine($"[uitest] U6.1 first-paint rows (no Refresh): {installRowCount} InstallRow(s), firstRenderDone={_firstRenderDone}");
+        Console.WriteLine($"[uitest] U6.1 PASS: {u61Pass}");
+
+        // ── U6.2 — controls resolve palette brushes, not Fluent defaults ─────
+        var p = CurrentPalette();
+
+        // BtnToggle.Background: AccentPill → Accent hex; OnPill → On hex.
+        bool on = _vm.MonitoringEnabled;
+        string expectedToggleHex = on ? p.Accent : p.On;
+        Color expectedToggleColor = MacTheme.ParseColor(expectedToggleHex);
+
+        bool toggleBrushOk = false;
+        string toggleActualStr = "(not SolidColorBrush)";
+        if (BtnToggle.Background is SolidColorBrush toggleBrush)
+        {
+            toggleActualStr = toggleBrush.Color.ToString();
+            toggleBrushOk = toggleBrush.Color == expectedToggleColor;
+        }
+        else
+        {
+            Console.WriteLine($"[uitest] U6.2 BtnToggle.Background is not a SolidColorBrush — type={BtnToggle.Background?.GetType().Name ?? "null"}");
+        }
+        Console.WriteLine($"[uitest] U6.2 BtnToggle.Background={toggleActualStr} expected={expectedToggleHex} match={toggleBrushOk}");
+
+        // StatusSub.Foreground: should equal palette Sub (set via {DynamicResource Sub} in XAML).
+        string expectedSubHex = p.Sub;
+        Color expectedSubColor = MacTheme.ParseColor(expectedSubHex);
+
+        bool subBrushOk = false;
+        string subActualStr = "(not SolidColorBrush)";
+        if (StatusSub.Foreground is SolidColorBrush subBrush)
+        {
+            subActualStr = subBrush.Color.ToString();
+            subBrushOk = subBrush.Color == expectedSubColor;
+        }
+        else
+        {
+            Console.WriteLine($"[uitest] U6.2 StatusSub.Foreground is not a SolidColorBrush — type={StatusSub.Foreground?.GetType().Name ?? "null"}");
+        }
+        Console.WriteLine($"[uitest] U6.2 StatusSub.Foreground={subActualStr} expected={expectedSubHex} match={subBrushOk}");
+
+        bool u62Pass = toggleBrushOk && subBrushOk;
+        Console.WriteLine($"[uitest] U6.2 PASS: {u62Pass}");
     }
 
     private void RunB3UiTests()
