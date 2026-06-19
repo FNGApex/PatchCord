@@ -55,8 +55,13 @@ which move behind `IDiscordPlatform`.
 Verified macOS engine facts (design §8 has the evidence trail):
 - **Layer A (Vencord/Equicord)** patches the BUNDLE's `…/Contents/Resources/app.asar` (swap to
   `_app.asar`), NOT the App-Support `core.asar`. (Corrects the B0 spike — confirmed by Vencord's
-  `find_discord_darwin.go` + `patcher.go`.) That file is user-owned, `-rw-r--r--`, writable without sudo;
-  the spike confirmed Discord relaunches fine after the swap.
+  `find_discord_darwin.go` + `patcher.go`.)
+- **Layer A writes require a one-time Full Disk Access grant (CORRECTION — design §15).** Although the
+  bundle `app.asar` is user-owned `-rw-r--r--`, macOS TCC "App Management" / `com.apple.provenance`
+  blocks writes inside the signed+notarized Discord.app from an unprivileged process (`EPERM`, verified
+  on Tahoe 26.5). The fix matches the official Vencord installer: the user grants the PatchCord app
+  **Full Disk Access** once (System Settings → Privacy & Security). Layer B (BetterDiscord, App-Support)
+  is OUTSIDE the bundle and unaffected.
 - **Layer B (BetterDiscord)** patches `~/Library/Application Support/<branch>/app-<ver>/modules/discord_desktop_core-N/discord_desktop_core/index.js`
   — a different file in a different root. (Confirmed by BD `scripts/inject.ts` + the local install.)
 - The two layers live in **separate roots** on macOS, so the abstraction resolves them independently.
@@ -114,6 +119,7 @@ Goal: a runnable mac app reusing Core + `MacDiscordPlatform`. (Design §11, §12
 | B3.6 | Run-at-login via LaunchAgent (`MacDiscordPlatform.SetRunAtLogin`) writing `~/Library/LaunchAgents/com.tomgks.patchcord.plist` + `launchctl bootstrap`/`bootout` | Toggle on; inspect plist; re-login | Plist present with the `--tray` ProgramArguments (design §12); toggle off removes it; enabled-state reflects file presence |
 | B3.7 | Single-instance on macOS (`TryAcquireSingleInstance`) via a lock file / named lock (replaces `Global\` mutex) | Launch the app twice | Second launch detects the first and exits/defers |
 | B3.8 | Re-patch-after-update on macOS: with a mod applied, restore the bundle `app.asar` to vanilla (simulate an update), wait one interval | Observe | App detects the mod is gone, re-applies, restarts Discord (proves item #4 mapping) |
+| B3.9 | **Full Disk Access onboarding (design §15):** `MacDiscordPlatform` surfaces the Layer-A `EPERM` as a typed condition; the UI detects it and shows an explanation + a button deep-linking to `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles`; re-checks after grant | Run unpatched without FDA, then grant and retry | Without FDA a clear "grant Full Disk Access" prompt shows (no silent failure); after granting FDA, the Layer-A patch succeeds and Discord runs the mod |
 
 ### Phase B4 — Packaging
 Goal: a double-clickable `.app`. (Design §13.)
@@ -121,7 +127,7 @@ Goal: a double-clickable `.app`. (Design §13.)
 | # | Checkpoint | Verify | Done when |
 |---|---|---|---|
 | B4.1 | `dotnet publish src/PatchCord.Mac -c Release -r osx-arm64 --self-contained true` produces the binary | Run the publish | Publish succeeds; self-contained binary emitted |
-| B4.2 | Wrap as `PatchCord.app` with `Info.plist` (`CFBundleIdentifier=com.tomgks.patchcord`, `LSUIElement=true`, icon) + `PatchCord.icns` (from `app.ico`) | Inspect bundle; double-click | Double-clicking `PatchCord.app` launches it to the menu bar on osx-arm64 |
+| B4.2 | Wrap as `PatchCord.app` with `Info.plist` (`CFBundleIdentifier=com.tomgks.patchcord`, `LSUIElement=true`, icon) + `PatchCord.icns` (from `app.ico`); **ad-hoc code-sign the bundle** (`codesign -s -`) so it has a stable identity for the Full Disk Access list (design §15) | Inspect bundle; double-click; `codesign -dv` | Double-clicking `PatchCord.app` launches it to the menu bar on osx-arm64; bundle is ad-hoc signed |
 | B4.3 | Add `publish-mac.sh` (mac analog of `publish.ps1`); keep `publish.ps1` Windows-only/untouched | Inspect both scripts | `publish-mac.sh` builds the `.app`; `publish.ps1` unchanged |
 | B4.4 | README documents the macOS build/install + Gatekeeper first-run + the official-installer alternative | Read README | macOS section present; notes Avalonia as the first NuGet dep and that Windows publish is unaffected |
 
@@ -134,6 +140,13 @@ Goal: a double-clickable `.app`. (Design §13.)
 ---
 
 ## Change log
+- 2026-06-18 — B2 done (commit 1a59d4d) + **TCC CORRECTION.** MacDiscordPlatform implemented & green
+  (8/8 self-test, process control + ShipIt probe live, swap byte-identical on a copy). Discovered the B0
+  spike was WRONG: Layer A bundle writes are blocked by macOS App-Management/`com.apple.provenance` TCC
+  (`EPERM`) from an unprivileged process — NOT a POSIX-perms issue. Resolution (matches the official
+  Vencord installer): one-time **Full Disk Access** grant. Added FDA requirement to verified-facts,
+  B3.9 (FDA onboarding), B4.2 (ad-hoc signing); full detail in design §15. Layer B unaffected. B2.8
+  real-bundle write + real-mod load remain unproven until FDA is granted to a signed .app.
 - 2026-06-18 — Approval: signed off Path B. Confirmed Layer A patches the bundle `app.asar` in
   place wherever Discord lives (no forced move to `~/Applications`); LaunchAgent via `launchctl`;
   bundle id `com.tomgks.patchcord`; osx-arm64 only (Intel unsupported). **Scope change:** pulled

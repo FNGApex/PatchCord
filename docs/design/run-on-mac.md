@@ -427,3 +427,39 @@ Mac shell (B2+), which cannot regress Windows because it is a separate project A
 Order: **B1 (core + abstraction, Windows-green) → B2 (mac engine impl) → B3 (Avalonia UI + lifecycle) →
 B4 (packaging).** The single highest-value early de-risk inside B1 is proving `PatchCord.Core` compiles
 on macOS with plain `net10.0` (no `EnableWindowsTargeting`).
+
+## 15. CORRECTION (2026-06-18): Layer A bundle writes require Full Disk Access (TCC)
+
+**The B0 spike (§7) and §8.1 were WRONG that the bundle `app.asar` is "writable without sudo."**
+They measured POSIX ownership/perms (`bear:staff`, `-rw-r--r--`) and inferred writability, but never
+attempted the write from an unprivileged process. Verified during B2 on macOS 26.5 (Tahoe), Apple
+Silicon:
+
+- A plain (unsigned, no-FDA) process writing inside `/Applications/Discord.app/Contents/Resources/`
+  gets **`EPERM` "Operation not permitted"**, NOT `EACCES`. The dir is `drwxr-xr-x bear:staff` so POSIX
+  would allow the owner — the block is macOS **TCC App-Management / `com.apple.provenance`** protection
+  of signed+notarized app bundles (Discord: hardened runtime, TeamID `53Q6R32WPB`). The
+  `com.apple.provenance` xattr is present on the bundle `app.asar`.
+- **Resolution (matches the official Vencord Installer):** the user grants the PatchCord app
+  **Full Disk Access** once (System Settings → Privacy & Security → Full Disk Access). The Vencord
+  Installer detects `os.ErrPermission` and shows: *"Permission denied. Please grant the installer Full
+  Disk Access in the system settings (privacy & security page)."* with a `sudo chown -R user:wheel`
+  fallback. There is **no Info.plist purpose-string that auto-grants FDA** — it is a manual, persistent
+  user grant (the app may deep-link to the pane via `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles`).
+
+**Scope of impact:**
+- **Layer A (Vencord/Equicord bundle swap) + OpenAsar** — affected; require FDA. This is the primary use case.
+- **Layer B (BetterDiscord, `~/Library/Application Support/<branch>/app-<ver>/.../index.js`)** — NOT
+  inside the bundle, NOT subject to App Management; unaffected.
+
+**Plan deltas (fold into spec):**
+- **B3 (UI):** add a first-run / on-EPERM **FDA onboarding** step — detect the permission error, show a
+  clear explanation + a button deep-linking to the Full Disk Access settings pane; re-check after grant.
+  `MacDiscordPlatform` Patch/Install must surface `EPERM` as a typed, catchable condition (not a generic IOException).
+- **B4 (packaging):** the `.app` should be **at least ad-hoc code-signed** so it has a stable identity to
+  add to the FDA list (an unsigned binary's FDA entry is path/identity-fragile across rebuilds). Document
+  the one-time FDA grant in the README install steps.
+- **Verification:** B2.8's real-bundle write and the real-mod load remain **unproven until FDA is granted
+  to a packaged/signed PatchCord.app**; the swap mechanism itself is proven byte-identical on a copy.
+
+Path B remains viable — this adds a one-time FDA grant (parity with the reference installer), not a hard blocker.
