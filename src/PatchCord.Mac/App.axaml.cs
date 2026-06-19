@@ -7,8 +7,7 @@ namespace PatchCord;
 
 /// <summary>
 /// Avalonia Application for PatchCord.Mac.
-/// B3a: bootstraps Fluent theme and a tray icon with a Quit item.
-/// Real UI (B3b), monitor loop (B3c), and lifecycle (B3d) are added in subsequent slices.
+/// B3b: loads config via MacAppState, creates MainViewModel, initializes MainWindow.
 /// </summary>
 public sealed partial class App : Application
 {
@@ -22,7 +21,14 @@ public sealed partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            desktop.MainWindow = new MainWindow();
+            // Load config + build the VM
+            var cfg = MacAppState.EnsureLoaded();
+            var vm  = new MainViewModel(cfg);
+
+            // Create and initialize the window
+            var window = new MainWindow();
+            desktop.MainWindow = window;
+            window.Initialize(vm);
         }
         base.OnFrameworkInitializationCompleted();
     }
