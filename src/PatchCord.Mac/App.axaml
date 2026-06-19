@@ -1,0 +1,26 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="PatchCord.App"
+             RequestedThemeVariant="Dark">
+
+    <Application.Styles>
+        <FluentTheme />
+    </Application.Styles>
+
+    <!-- Tray icon with a Quit item — proves the macOS NSStatusItem path (B3a). -->
+    <TrayIcon.Icons>
+        <TrayIcons>
+            <TrayIcon Icon="/Assets/tray-icon.png"
+                      ToolTipText="PatchCord">
+                <TrayIcon.Menu>
+                    <NativeMenu>
+                        <NativeMenuItem Header="PatchCord" IsEnabled="False" />
+                        <NativeMenuItemSeparator />
+                        <NativeMenuItem Header="Quit" />
+                    </NativeMenu>
+                </TrayIcon.Menu>
+            </TrayIcon>
+        </TrayIcons>
+    </TrayIcon.Icons>
+
+</Application>

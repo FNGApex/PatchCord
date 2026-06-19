@@ -1,0 +1,17 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="PatchCord.MainWindow"
+        Title="PatchCord"
+        Width="480"
+        Height="320"
+        CanResize="False">
+
+    <Grid>
+        <TextBlock Text="PatchCord — macOS (UI port in progress)"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"
+                   FontSize="16"
+                   Opacity="0.7" />
+    </Grid>
+
+</Window>

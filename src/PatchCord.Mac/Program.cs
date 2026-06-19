@@ -2,24 +2,41 @@ using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using System.Threading;
+using Avalonia;
 
 namespace PatchCord;
 
 /// <summary>
 /// Entry point for PatchCord.Mac.
-/// Currently supports --mac-selftest for headless CI-style verification of
-/// MacDiscordPlatform (all B2 checkpoints). Avalonia UI entry point is added in B3.
+/// <para>
+/// Normal launch: starts Avalonia (AppBuilder → UsePlatformDetect →
+/// StartWithClassicDesktopLifetime). The <c>--mac-selftest</c> branch runs the
+/// headless B2 self-test and exits WITHOUT touching Avalonia.
+/// </para>
 /// </summary>
 static class Program
 {
     static int Main(string[] args)
     {
+        // Headless self-test (B2 checkpoints) — Avalonia is NOT started on this path.
         if (args.Contains("--mac-selftest"))
             return RunSelfTest();
 
-        Console.WriteLine("PatchCord.Mac — no UI yet (B3). Run with --mac-selftest to verify B2 checkpoints.");
-        return 0;
+        // Non-blocking smoke: auto-close window after N ms then exit.
+        if (args.Contains("--mac-uitest"))
+            MainWindow.AutoCloseAfterMs = 2500;
+
+        // Normal / smoke launch — start Avalonia.
+        return BuildAvaloniaApp()
+            .StartWithClassicDesktopLifetime(args);
     }
+
+    /// <summary>Builds the shared AppBuilder (also used by Avalonia design-time tooling).</summary>
+    public static AppBuilder BuildAvaloniaApp()
+        => AppBuilder.Configure<App>()
+                     .UsePlatformDetect()
+                     .LogToTrace();
+
 
     // ────────────────────────────────────────────────────────────────────────────
     // Self-test: exercises all B2 checkpoints headlessly. Prints PASS / FAIL per

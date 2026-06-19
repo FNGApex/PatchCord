@@ -8,11 +8,24 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>PatchCord.Mac</AssemblyName>
     <RootNamespace>PatchCord</RootNamespace>
-    <!-- No Avalonia yet (B3). No NuGet dependencies in this phase. -->
+    <!-- Avalonia is the first (and only) NuGet dep; lives ONLY in this project. -->
+    <!-- Core and the Windows shell stay zero-NuGet. -->
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Avalonia 12.0.4 — first stable release with a net10.0 dependency group. -->
+    <PackageReference Include="Avalonia"               Version="12.0.4" />
+    <PackageReference Include="Avalonia.Desktop"       Version="12.0.4" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\PatchCord.Core\PatchCord.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Embed tray icon as an Avalonia asset resource. -->
+  <ItemGroup>
+    <AvaloniaResource Include="Assets/**" />
   </ItemGroup>
 
 </Project>
