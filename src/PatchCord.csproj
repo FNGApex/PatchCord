@@ -65,10 +65,14 @@
     <ProjectReference Include="PatchCord.Core\PatchCord.Core.csproj" />
   </ItemGroup>
 
-  <!-- Exclude the Core sub-project files from this project's compile glob.
-       They are referenced via ProjectReference above, not compiled inline. -->
+  <!-- Exclude sub-project files from this project's compile glob.
+       PatchCord.Core and PatchCord.Mac are referenced via ProjectReference, not compiled inline.
+       Without these removes the default **.cs glob pulls in their source files and generated obj
+       files (AssemblyInfo, GlobalUsings, AssemblyAttributes), causing CS0579 duplicate-attribute
+       errors when building the solution on macOS. -->
   <ItemGroup>
     <Compile Remove="PatchCord.Core\**" />
+    <Compile Remove="PatchCord.Mac\**" />
   </ItemGroup>
 
 </Project>
