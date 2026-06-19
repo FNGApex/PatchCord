@@ -39,22 +39,34 @@ internal sealed class MacDiscordPlatform : IDiscordPlatform
 
     // ── Mod-data paths (B2.7) ─────────────────────────────────────────────────
 
-    private static readonly string AppSupportRoot =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                     "Library", "Application Support");
+    /// <summary>
+    /// Returns the App Support root directory.  When the <c>PATCHCORD_APPSUPPORT_ROOT</c>
+    /// environment variable is set and non-empty it is used as the root instead of
+    /// <c>~/Library/Application Support</c>.  This is a test seam (B5.1) that mirrors
+    /// the existing <c>VENCORD_USER_DATA_DIR</c>/<c>EQUICORD_USER_DATA_DIR</c> pattern;
+    /// the default (env var unset) is byte-identical to the previous behaviour.
+    /// </summary>
+    private static string GetAppSupportRoot()
+    {
+        var envOverride = Environment.GetEnvironmentVariable("PATCHCORD_APPSUPPORT_ROOT");
+        if (envOverride is { Length: > 0 })
+            return envOverride;
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                            "Library", "Application Support");
+    }
 
     public string VencordPatcherPath { get; } =
         Environment.GetEnvironmentVariable("VENCORD_USER_DATA_DIR") is { } v && v.Length > 0
             ? Path.Combine(v, "dist", "patcher.js")
-            : Path.Combine(AppSupportRoot, "Vencord", "dist", "patcher.js");
+            : Path.Combine(GetAppSupportRoot(), "Vencord", "dist", "patcher.js");
 
     public string EquicordPatcherPath { get; } =
         Environment.GetEnvironmentVariable("EQUICORD_USER_DATA_DIR") is { } e && e.Length > 0
             ? Path.Combine(e, "dist", "patcher.js")
-            : Path.Combine(AppSupportRoot, "Equicord", "dist", "patcher.js");
+            : Path.Combine(GetAppSupportRoot(), "Equicord", "dist", "patcher.js");
 
     public string BetterDiscordAsarPath { get; } =
-        Path.Combine(AppSupportRoot, "BetterDiscord", "data", "betterdiscord.asar");
+        Path.Combine(GetAppSupportRoot(), "BetterDiscord", "data", "betterdiscord.asar");
 
     // These are evaluated per-instance so VENCORD_USER_DATA_DIR / EQUICORD_USER_DATA_DIR
     // are read at construction time. Re-use is fine for a single-run process.
@@ -151,10 +163,11 @@ internal sealed class MacDiscordPlatform : IDiscordPlatform
     /// </summary>
     private string AppSupportDirForBranch(string branch)
     {
+        var root = GetAppSupportRoot();
         foreach (var (b, _, appSupport, _) in BranchMap)
-            if (b == branch) return Path.Combine(AppSupportRoot, appSupport);
+            if (b == branch) return Path.Combine(root, appSupport);
         // Unknown branch: lowercase-no-spaces heuristic (matches BD inject.ts behaviour).
-        return Path.Combine(AppSupportRoot, branch.ToLowerInvariant().Replace(" ", ""));
+        return Path.Combine(root, branch.ToLowerInvariant().Replace(" ", ""));
     }
 
     /// <summary>
@@ -193,30 +206,109 @@ internal sealed class MacDiscordPlatform : IDiscordPlatform
     }
 
     /// <summary>
-    /// macOS update guard (design §8.5). Returns true when:
-    /// (a) a ShipIt process is running (Squirrel.Mac updater), OR
+    /// The recency window for <c>ShipIt_request.json</c>: if the file was modified within
+    /// this many seconds it is treated as an in-progress update, even if the ShipIt process
+    /// has not yet spawned (pre-spawn window). 90 s is a reasonable upper bound for copying
+    /// a ~200 MB Discord bundle.
+    /// </summary>
+    private const int ShipItRecencyWindowSeconds = 90;
+
+    /// <summary>
+    /// macOS update guard (design §8.5 / B5.7). Returns true when:
+    /// (a) a Discord-identity-scoped ShipIt process is running (Squirrel.Mac updater), OR
     /// (b) ShipIt_request.json in the branch's App-Support dir was modified within
-    ///     the last 90 seconds (covers the window where ShipIt may not yet be running
-    ///     but the request file has been written to trigger the update).
-    /// Recency window: 90 s. Next-tick convergence backstops any race (patch is
-    /// idempotent; _patchFailed prevents kill-loop on failure).
+    ///     <see cref="ShipItRecencyWindowSeconds"/> (covers the window where ShipIt may not
+    ///     yet be running but the request file has been written to trigger the update).
+    /// <para>
+    /// The process check is DISCORD-IDENTITY-SCOPED (B5.7 fix): a ShipIt process whose
+    /// executable path / command line does not contain a Discord identity string is ignored.
+    /// This prevents false positives from other Squirrel.Mac apps (e.g. VS Code's
+    /// <c>com.microsoft.VSCode.ShipIt</c>, verified live false-positive before this fix).
+    /// </para>
     /// </summary>
     public bool IsUpdateInProgress(Install inst)
     {
-        // (a) Running ShipIt process
-        if (Process.GetProcessesByName("ShipIt").Length > 0)
-            return true;
+        // (a) Discord-identity-scoped ShipIt process check (B5.7).
+        // Discord's ShipIt carries a Discord-specific discriminator in its path/argv:
+        //   cache dir: …/com.hnc.Discord.ShipIt/…
+        //   bundle id in argv: com.discord.discord / com.hnc.Discord
+        // We filter for that identity rather than accepting any "ShipIt" process name.
+        foreach (var p in Process.GetProcessesByName("ShipIt"))
+        {
+            try
+            {
+                if (IsDiscordShipIt(p))
+                    return true;
+            }
+            catch { /* unreadable process info — skip */ }
+        }
 
-        // (b) Fresh ShipIt_request.json in the branch App-Support dir
+        // (b) Fresh ShipIt_request.json in the branch App-Support dir.
+        // This file is Discord-specific (lives under the branch's App-Support dir) and its
+        // presence + freshness is sufficient as a pre-spawn backstop.
         var requestFile = Path.Combine(AppSupportDirForBranch(inst.Branch), "ShipIt_request.json");
         if (File.Exists(requestFile))
         {
             var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(requestFile);
-            if (age.TotalSeconds < 90)
+            if (age.TotalSeconds < ShipItRecencyWindowSeconds)
                 return true;
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Returns true if <paramref name="p"/> is Discord's own ShipIt process.
+    /// Tries <c>Process.MainModule.FileName</c> first; falls back to
+    /// <c>ps -o command= -p &lt;pid&gt;</c> if that is null/unreadable (can occur on
+    /// macOS for foreign-context processes). A process is considered Discord's if its
+    /// resolved command contains a Discord identity string ("discord", "com.hnc.discord",
+    /// or "com.discord.discord" — case-insensitive match on the executable path).
+    /// </summary>
+    private static bool IsDiscordShipIt(Process p)
+    {
+        // Try MainModule.FileName (may be null/inaccessible on macOS for foreign processes).
+        string? cmdLine = null;
+        try { cmdLine = p.MainModule?.FileName; } catch { }
+
+        // Fall back to `ps -o command= -p <pid>` which reads the argv string directly.
+        if (string.IsNullOrEmpty(cmdLine))
+            cmdLine = GetProcessCommandViaPsCmd(p.Id);
+
+        if (string.IsNullOrEmpty(cmdLine))
+        {
+            // Cannot determine identity — assume NOT Discord's to avoid false positives.
+            return false;
+        }
+
+        // Discord identity markers in the ShipIt command/path:
+        //   - the ShipIt cache path: …/com.hnc.Discord.ShipIt/…
+        //   - the bundle id: com.discord.discord
+        //   - the word "discord" more broadly (all Discord branches)
+        var cmdLower = cmdLine.ToLowerInvariant();
+        return cmdLower.Contains("discord");
+    }
+
+    /// <summary>
+    /// Runs <c>ps -o command= -p &lt;pid&gt;</c> and returns the stdout, or null on failure.
+    /// Used as a fallback when <c>Process.MainModule.FileName</c> is not readable.
+    /// </summary>
+    private static string? GetProcessCommandViaPsCmd(int pid)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("ps", $"-o command= -p {pid}")
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            using var ps = Process.Start(psi);
+            if (ps == null) return null;
+            var output = ps.StandardOutput.ReadToEnd().Trim();
+            ps.WaitForExit(3000);
+            return output.Length > 0 ? output : null;
+        }
+        catch { return null; }
     }
 
     public void Stop(Install inst)
@@ -240,22 +332,19 @@ internal sealed class MacDiscordPlatform : IDiscordPlatform
 
     public void Start(Install inst)
     {
-        // macOS relaunch: open -a "<bundle name without .app>"
-        // Works with or without the .app suffix; we use the canonical bundle name.
-        var bundleName = BundleNameForBranch(inst.Branch);
+        // B5.8: relaunch the INSTALLED copy explicitly using its full bundle path
+        // so LaunchServices cannot accidentally pick up a staged update bundle at
+        // app-<ver>/Discord.app/ (the updateBundleURL in ShipIt_request.json).
+        //
+        // Prefer: open "<inst.Path>"  (e.g. /Applications/Discord.app)
+        // The platform already carries the bundle path in Install.Path (set by
+        // DiscoverInstalls from /Applications); this is always the installed copy.
         Process.Start(new ProcessStartInfo
         {
             FileName = "open",
-            Arguments = $"-a \"{bundleName}\"",
+            Arguments = $"\"{inst.Path}\"",
             UseShellExecute = false,
         });
-    }
-
-    private static string BundleNameForBranch(string branch)
-    {
-        foreach (var (b, bundle, _, _) in BranchMap)
-            if (b == branch) return bundle;
-        return branch;
     }
 
     // ── Run-at-login (design §12) ─────────────────────────────────────────────
@@ -359,7 +448,11 @@ internal sealed class MacDiscordPlatform : IDiscordPlatform
     /// </summary>
     public bool TryAcquireSingleInstance()
     {
-        var lockDir = Path.Combine(AppSupportRoot, "PatchCord");
+        // The single-instance lock always uses the real (non-overridden) App Support root so
+        // test harnesses that set PATCHCORD_APPSUPPORT_ROOT don't change the lock location.
+        var realRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                                    "Library", "Application Support");
+        var lockDir = Path.Combine(realRoot, "PatchCord");
         Directory.CreateDirectory(lockDir);
         var lockPath = Path.Combine(lockDir, ".lock");
         try

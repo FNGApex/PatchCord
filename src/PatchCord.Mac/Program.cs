@@ -37,6 +37,10 @@ static class Program
         if (args.Contains("--mac-b37test"))
             return RunB37SingleInstanceTest();
 
+        // B5.7: ShipIt Discord-identity-scoping regression guard.
+        if (args.Contains("--mac-b5-shipit"))
+            return RunB5ShipItTest();
+
         // Any --mac-* test flag: skip single-instance check so parallel test runs
         // (or the two-pass selftest + fdatest) don't lock each other out.
         bool isMacTest = args.Any(a => a.StartsWith("--mac-", StringComparison.Ordinal));
@@ -878,6 +882,340 @@ static class Program
         // ── Summary ───────────────────────────────────────────────────────────
         Console.WriteLine();
         Console.WriteLine($"=== B3.9 FDA test results: {passed} passed, {failed} failed ===");
+        return failed == 0 ? 0 : 1;
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
+    // B5.7 ShipIt identity test: asserts that IsUpdateInProgress does NOT fire for a
+    // foreign (non-Discord) ShipIt process (NEGATIVE), DOES fire for a Discord-identity-
+    // scoped ShipIt process with no request file (POSITIVE, proving the process-check
+    // accept path), and DOES/DOES-NOT fire for fresh/stale ShipIt_request.json (ii).
+    //
+    // Stubbing a ShipIt process the kernel reports as "ShipIt":
+    // On macOS, Process.GetProcessesByName("ShipIt") matches the executable leaf name.
+    // We compile a tiny native binary named "ShipIt" with clang and run it from a temp
+    // directory. The kernel sees the process name as "ShipIt" (leaf of argv[0]).
+    // The identity filter in IsDiscordShipIt then inspects MainModule.FileName; the
+    // path will (NEGATIVE) or will not (POSITIVE) contain "discord", exercising both
+    // branches of the filter.  This is the direct regression guard for the VS Code
+    // false-positive (com.microsoft.VSCode.ShipIt).
+    // ────────────────────────────────────────────────────────────────────────────
+
+    static int RunB5ShipItTest()
+    {
+        Console.WriteLine("=== PatchCord.Mac B5.7 ShipIt identity test ===");
+        Console.WriteLine();
+
+        int passed = 0, failed = 0;
+
+        // Build a minimal fake Install for Discord (Branch="Discord").
+        var fakeInstall = new Install
+        {
+            Name   = "Discord",
+            Branch = "Discord",
+            Path   = "/Applications/Discord.app",
+        };
+
+        // Shared EMPTY fixture root: no ShipIt_request.json inside, so the
+        // request-file backstop (path b) cannot mask the process-check result (path a).
+        var emptyFixtureRoot = Path.Combine(Path.GetTempPath(), $"patchcord_b57_empty_{Guid.NewGuid():N}");
+        // Only create the branch subdir so AppSupportDirForBranch("Discord") resolves
+        // to an existing directory — but leave it empty (no request file).
+        var emptyDiscordDir = Path.Combine(emptyFixtureRoot, "discord");
+        Directory.CreateDirectory(emptyDiscordDir);
+
+        // Fixture root with a discord branch dir used for the request-file sub-tests.
+        var requestFixtureRoot = Path.Combine(Path.GetTempPath(), $"patchcord_b57_req_{Guid.NewGuid():N}");
+        var requestDiscordDir = Path.Combine(requestFixtureRoot, "discord");
+        Directory.CreateDirectory(requestDiscordDir);
+
+        // Capture the original env var so we can restore it.
+        var origEnv = Environment.GetEnvironmentVariable("PATCHCORD_APPSUPPORT_ROOT");
+
+        // Stubs: one "foreign" (no "discord" in path), one "discord-identity" ("discord" in path).
+        // Each gets its own temp dir so they can coexist in the finally block cleanup.
+        string? foreignStubDir = null;
+        string? discordStubDir = null;
+        Process? foreignShipIt = null;
+        Process? discordShipIt = null;
+
+        // Helper: compile a tiny native ShipIt binary in the given directory using clang.
+        // Returns the path to the compiled binary, or null on failure.
+        static string? CompileShipItStub(string dir)
+        {
+            var cFile = Path.Combine(dir, "stub.c");
+            var exePath = Path.Combine(dir, "ShipIt");
+            File.WriteAllText(cFile,
+                "#include <unistd.h>\n" +
+                "#include <stdlib.h>\n" +
+                "int main(int argc, char *argv[]) {\n" +
+                "    int secs = argc > 1 ? atoi(argv[1]) : 30;\n" +
+                "    sleep(secs);\n" +
+                "    return 0;\n" +
+                "}\n");
+            using var compile = Process.Start(new ProcessStartInfo("clang",
+                $"-o \"{exePath}\" \"{cFile}\"") { UseShellExecute = false });
+            compile?.WaitForExit(15000);
+            return File.Exists(exePath) ? exePath : null;
+        }
+
+        try
+        {
+            // ── Test (i-NEGATIVE): foreign ShipIt process is rejected by identity filter ──
+            //
+            // The stub directory has NO "discord" in its path, so IsDiscordShipIt will
+            // return false for it.  We assert:
+            //   (a) GetProcessesByName("ShipIt") contains the stub PID → filter code path RUNS.
+            //   (b) IsUpdateInProgress(inst) returns false → filter REJECTED the foreign stub.
+            // If (a) fails we FAIL loudly — a vacuous pass is not acceptable.
+            {
+                var tag = "B5.7-i-NEGATIVE";
+                try
+                {
+                    foreignStubDir = Path.Combine(Path.GetTempPath(), $"patchcord_b5_foreign_{Guid.NewGuid():N}");
+                    Directory.CreateDirectory(foreignStubDir);
+
+                    var stubExe = CompileShipItStub(foreignStubDir);
+                    if (stubExe == null)
+                    {
+                        Fail(tag, "clang failed to compile the foreign ShipIt stub — cannot run this test.", ref failed);
+                        goto afterNegative;
+                    }
+                    Console.WriteLine($"    Foreign stub compiled: {stubExe}");
+
+                    foreignShipIt = Process.Start(new ProcessStartInfo(stubExe, "60")
+                    {
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError  = true,
+                    });
+
+                    if (foreignShipIt == null || foreignShipIt.HasExited)
+                    {
+                        Fail(tag, "Could not spawn the foreign ShipIt stub process.", ref failed);
+                        goto afterNegative;
+                    }
+
+                    Console.WriteLine($"    Foreign stub PID: {foreignShipIt.Id}");
+                    // Give the kernel a moment to register the process.
+                    Thread.Sleep(500);
+
+                    // (a) Verify GetProcessesByName can see the stub.
+                    var byName = Process.GetProcessesByName("ShipIt");
+                    bool stubSeen = byName.Any(p => p.Id == foreignShipIt.Id);
+                    Console.WriteLine($"    GetProcessesByName(\"ShipIt\") count: {byName.Length}");
+                    Console.WriteLine($"    Stub PID {foreignShipIt.Id} found in GetProcessesByName: {stubSeen}");
+
+                    if (!stubSeen)
+                    {
+                        Fail(tag,
+                            $"PREREQUISITE FAILED: stub PID {foreignShipIt.Id} NOT found by " +
+                            "Process.GetProcessesByName(\"ShipIt\"). The kernel does not see our " +
+                            "stub as 'ShipIt' — the identity-filter code path will NOT run for it, " +
+                            "so any subsequent IsUpdateInProgress=false result would be vacuous. " +
+                            "Cannot confirm the filter is working.",
+                            ref failed);
+                        goto afterNegative;
+                    }
+
+                    // (b) IsUpdateInProgress must return false (identity filter rejects foreign stub).
+                    // Point PATCHCORD_APPSUPPORT_ROOT at the EMPTY fixture so no request file exists.
+                    Environment.SetEnvironmentVariable("PATCHCORD_APPSUPPORT_ROOT", emptyFixtureRoot);
+                    var platform = new MacDiscordPlatform();
+                    bool result = platform.IsUpdateInProgress(fakeInstall);
+                    Console.WriteLine($"    IsUpdateInProgress (empty fixture, foreign stub running): {result}");
+
+                    if (result)
+                        Fail(tag,
+                            $"REGRESSION: IsUpdateInProgress=true even though the only ShipIt " +
+                            $"process at PID {foreignShipIt.Id} is a foreign stub (no 'discord' in " +
+                            $"its path '{stubExe}'). Discord-identity filter is broken — " +
+                            "this reproduces the VS Code false-positive bug.",
+                            ref failed);
+                    else
+                        Pass(tag,
+                            $"Stub PID {foreignShipIt.Id} confirmed in GetProcessesByName — " +
+                            "identity filter ran and correctly REJECTED the foreign stub " +
+                            $"(path has no 'discord': '{stubExe}'). " +
+                            "IsUpdateInProgress=false. VS Code false-positive regression guard: OK.",
+                            ref passed);
+                }
+                catch (Exception ex) { Fail(tag, ex.ToString(), ref failed); }
+                finally
+                {
+                    if (foreignShipIt != null && !foreignShipIt.HasExited)
+                    {
+                        try { foreignShipIt.Kill(); } catch { }
+                        foreignShipIt.WaitForExit(3000);
+                    }
+                    foreignShipIt?.Dispose();
+                    foreignShipIt = null;
+                }
+                afterNegative:;
+            }
+
+            // ── Test (i-POSITIVE): Discord-identity ShipIt is accepted by identity filter ──
+            //
+            // The stub directory path contains "discord" (mirrors the real Discord ShipIt
+            // cache path, e.g. …/com.hnc.Discord.ShipIt/…).  With PATCHCORD_APPSUPPORT_ROOT
+            // pointed at the EMPTY fixture (no request file), the ONLY way
+            // IsUpdateInProgress can return true is via the process check.  We assert:
+            //   (a) GetProcessesByName("ShipIt") contains the stub PID → filter runs.
+            //   (b) IsUpdateInProgress(inst) returns true → filter ACCEPTED the Discord stub.
+            {
+                var tag = "B5.7-i-POSITIVE";
+                try
+                {
+                    discordStubDir = Path.Combine(Path.GetTempPath(), $"com.hnc.Discord.ShipIt_{Guid.NewGuid():N}");
+                    Directory.CreateDirectory(discordStubDir);
+
+                    var stubExe = CompileShipItStub(discordStubDir);
+                    if (stubExe == null)
+                    {
+                        Fail(tag, "clang failed to compile the Discord-identity ShipIt stub.", ref failed);
+                        goto afterPositive;
+                    }
+                    Console.WriteLine($"    Discord-identity stub compiled: {stubExe}");
+
+                    discordShipIt = Process.Start(new ProcessStartInfo(stubExe, "60")
+                    {
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError  = true,
+                    });
+
+                    if (discordShipIt == null || discordShipIt.HasExited)
+                    {
+                        Fail(tag, "Could not spawn the Discord-identity ShipIt stub process.", ref failed);
+                        goto afterPositive;
+                    }
+
+                    Console.WriteLine($"    Discord-identity stub PID: {discordShipIt.Id}");
+                    Thread.Sleep(500);
+
+                    // (a) Verify GetProcessesByName can see the stub.
+                    var byName = Process.GetProcessesByName("ShipIt");
+                    bool stubSeen = byName.Any(p => p.Id == discordShipIt.Id);
+                    Console.WriteLine($"    GetProcessesByName(\"ShipIt\") count: {byName.Length}");
+                    Console.WriteLine($"    Stub PID {discordShipIt.Id} found in GetProcessesByName: {stubSeen}");
+
+                    if (!stubSeen)
+                    {
+                        Fail(tag,
+                            $"PREREQUISITE FAILED: stub PID {discordShipIt.Id} NOT found by " +
+                            "Process.GetProcessesByName(\"ShipIt\"). Cannot confirm accept path.",
+                            ref failed);
+                        goto afterPositive;
+                    }
+
+                    // (b) IsUpdateInProgress must return true via the process-check path only.
+                    // PATCHCORD_APPSUPPORT_ROOT is still pointing at emptyFixtureRoot (no request file).
+                    Environment.SetEnvironmentVariable("PATCHCORD_APPSUPPORT_ROOT", emptyFixtureRoot);
+                    var platform = new MacDiscordPlatform();
+                    bool result = platform.IsUpdateInProgress(fakeInstall);
+                    Console.WriteLine($"    IsUpdateInProgress (empty fixture, Discord-identity stub running): {result}");
+
+                    if (!result)
+                        Fail(tag,
+                            $"IsUpdateInProgress=false even though stub PID {discordShipIt.Id} has " +
+                            $"'discord' in its path ('{stubExe}'). " +
+                            "Discord-identity filter failed to accept a Discord-scoped ShipIt process. " +
+                            "The accept-path of the filter is broken.",
+                            ref failed);
+                    else
+                        Pass(tag,
+                            $"Stub PID {discordShipIt.Id} confirmed in GetProcessesByName — " +
+                            "identity filter ran and correctly ACCEPTED the Discord-identity stub " +
+                            $"(path contains 'discord': '{stubExe}'). " +
+                            "IsUpdateInProgress=true via process-check path only (no request file). " +
+                            "Filter accept-path: OK.",
+                            ref passed);
+                }
+                catch (Exception ex) { Fail(tag, ex.ToString(), ref failed); }
+                finally
+                {
+                    if (discordShipIt != null && !discordShipIt.HasExited)
+                    {
+                        try { discordShipIt.Kill(); } catch { }
+                        discordShipIt.WaitForExit(3000);
+                    }
+                    discordShipIt?.Dispose();
+                    discordShipIt = null;
+                }
+                afterPositive:;
+            }
+
+            // ── Test (ii-a): stale ShipIt_request.json reads false ────────────────
+            {
+                var tag = "B5.7-ii-stale";
+                try
+                {
+                    Environment.SetEnvironmentVariable("PATCHCORD_APPSUPPORT_ROOT", requestFixtureRoot);
+                    var requestFile = Path.Combine(requestDiscordDir, "ShipIt_request.json");
+                    File.WriteAllText(requestFile, "{\"bundleIdentifier\":\"com.discord.discord\"}");
+                    // Backdate the mtime by 200 s (well beyond the 90 s window).
+                    File.SetLastWriteTimeUtc(requestFile, DateTime.UtcNow.AddSeconds(-200));
+
+                    var platform = new MacDiscordPlatform();
+                    bool probeResult = platform.IsUpdateInProgress(fakeInstall);
+                    Console.WriteLine($"    Stale ShipIt_request.json (200s old) → IsUpdateInProgress: {probeResult}");
+
+                    if (probeResult)
+                        Fail(tag, "IsUpdateInProgress=true for a 200s-old ShipIt_request.json — stale file should read false.", ref failed);
+                    else
+                        Pass(tag, "IsUpdateInProgress=false for stale ShipIt_request.json (200s > 90s window). Correct.", ref passed);
+                }
+                catch (Exception ex) { Fail(tag, ex.ToString(), ref failed); }
+            }
+
+            // ── Test (ii-b): fresh ShipIt_request.json reads true ─────────────────
+            {
+                var tag = "B5.7-ii-fresh";
+                try
+                {
+                    Environment.SetEnvironmentVariable("PATCHCORD_APPSUPPORT_ROOT", requestFixtureRoot);
+                    var requestFile = Path.Combine(requestDiscordDir, "ShipIt_request.json");
+                    // Touch the file (write + set mtime = now).
+                    File.WriteAllText(requestFile, "{\"bundleIdentifier\":\"com.discord.discord\"}");
+                    File.SetLastWriteTimeUtc(requestFile, DateTime.UtcNow);
+
+                    var platform = new MacDiscordPlatform();
+                    bool probeResult = platform.IsUpdateInProgress(fakeInstall);
+                    Console.WriteLine($"    Fresh ShipIt_request.json (just touched) → IsUpdateInProgress: {probeResult}");
+
+                    if (!probeResult)
+                        Fail(tag, "IsUpdateInProgress=false for a freshly-touched ShipIt_request.json — should read true.", ref failed);
+                    else
+                        Pass(tag, "IsUpdateInProgress=true for fresh ShipIt_request.json. Correct.", ref passed);
+                }
+                catch (Exception ex) { Fail(tag, ex.ToString(), ref failed); }
+            }
+        }
+        finally
+        {
+            // Restore env var.
+            Environment.SetEnvironmentVariable("PATCHCORD_APPSUPPORT_ROOT", origEnv);
+
+            // Kill stubs if still running.
+            foreach (var (proc, label) in new[] { (foreignShipIt, "foreign"), (discordShipIt, "discord") })
+            {
+                if (proc != null && !proc.HasExited)
+                {
+                    try { proc.Kill(); } catch { }
+                    proc.WaitForExit(3000);
+                }
+                proc?.Dispose();
+            }
+
+            // Clean up all temp dirs.
+            foreach (var dir in new[] { foreignStubDir, discordStubDir, emptyFixtureRoot, requestFixtureRoot })
+            {
+                try { if (dir != null && Directory.Exists(dir)) Directory.Delete(dir, recursive: true); } catch { }
+            }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"=== B5.7 ShipIt identity test results: {passed} passed, {failed} failed ===");
         return failed == 0 ? 0 : 1;
     }
 
