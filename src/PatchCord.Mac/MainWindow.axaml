@@ -9,23 +9,25 @@
 
   <Border Margin="0" CornerRadius="8">
 
-    <Grid RowDefinitions="50,Auto,*">
+    <Grid RowDefinitions="Auto,Auto,*">
 
-      <!-- ── Title bar ──────────────────────────────────────────────────── -->
-      <Grid Grid.Row="0">
-        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="22,0,0,0">
-          <Border Width="9" Height="9" CornerRadius="2" Background="{DynamicResource Accent}"/>
-          <TextBlock Text="PATCH" FontSize="14" FontWeight="Bold" Margin="12,0,0,0" VerticalAlignment="Center"
-                     Foreground="{DynamicResource Text}"
-                     FontFamily="{StaticResource SpaceGrotesk}"/>
-          <TextBlock Text="CORD"  FontSize="14" FontWeight="Bold" Margin="3,0,0,0"  VerticalAlignment="Center"
-                     Foreground="{DynamicResource Accent}"
-                     FontFamily="{StaticResource SpaceGrotesk}"/>
-        </StackPanel>
-      </Grid>
+      <!-- ── Wordmark (content-area, below native macOS title bar) ────────
+           Left-aligned at 24px to match the tab bar inset; top margin 20px
+           gives breathing room under the native traffic-light band.
+           Title="PatchCord" (Window property) keeps the native bar clean. -->
+      <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="24,20,0,4">
+        <Border Width="9" Height="9" CornerRadius="2" Background="{DynamicResource Accent}"
+                VerticalAlignment="Center"/>
+        <TextBlock Text="PATCH" FontSize="14" FontWeight="Bold" Margin="12,0,0,0" VerticalAlignment="Center"
+                   Foreground="{DynamicResource Text}"
+                   FontFamily="{StaticResource SpaceGrotesk}"/>
+        <TextBlock Text="CORD"  FontSize="14" FontWeight="Bold" Margin="3,0,0,0"  VerticalAlignment="Center"
+                   Foreground="{DynamicResource Accent}"
+                   FontFamily="{StaticResource SpaceGrotesk}"/>
+      </StackPanel>
 
       <!-- ── Tab bar ────────────────────────────────────────────────────── -->
-      <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="24,2,0,8">
+      <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="24,4,0,8">
         <Button x:Name="TabStatusBtn"
                 Content="Status"
                 Margin="0,0,24,0"
