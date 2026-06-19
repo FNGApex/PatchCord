@@ -1,12 +1,18 @@
 # HANDOFF — Run-on-Mac (Path B port)
 
-**Status: APPROVED — READY FOR B1.** Re-plan done and signed off 2026-06-18. The coarse
-B1–B4 phases are now checkpoint tables (B1.1–B4.4) in `docs/spec/run-on-mac.md`; design §8–§14
-hold the resolved 8 items. Nothing has been built; Windows build/publish is untouched.
+**Status: IMPLEMENTED (B1–B4) on branch `feat/macos-port`, 2026-06-18 — 12 commits, all green.**
+Path A + Path B are built and verified on macOS 26.5 / Apple Silicon. The Windows shell + publish.ps1
+were never regressed. Spec checkpoint tables in `docs/spec/run-on-mac.md` are all met; the Change log
+lists the per-phase commits.
 
-**Resume by running `/ax-implement` starting at checkpoint B1** (portable-core split —
-reversible, keeps Windows green). Read `docs/spec/run-on-mac.md` (the checkpoint tables) +
-`docs/design/run-on-mac.md` §8–§14 first.
+**The one deferred item (mechanism-only, by user choice):** the live Layer-A real-bundle Vencord/Equicord
+PATCH + real-mod load. macOS App-Management TCC blocks bundle writes from an unprivileged process; the
+packaged PatchCord.app needs a one-time App-Management / Full Disk Access grant (its FDA onboarding guides
+this). The swap is proven byte-identical on a copy; full live confirmation awaits a real mod install +
+granting the .app. BetterDiscord (Layer B, App-Support) is unaffected.
+
+**To finish/ship:** install Vencord (official installer), `./publish-mac.sh`, launch `publish/PatchCord.app`,
+grant it App Management when prompted, and confirm a real patch+restart. Then merge `feat/macos-port`.
 
 Approval decisions (2026-06-18): patch the bundle `app.asar` in place wherever Discord lives
 (no forced `~/Applications` move); ShipIt mid-update probe IS in v1 scope (B2.6); LaunchAgent

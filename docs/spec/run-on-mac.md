@@ -1,6 +1,12 @@
 # Spec — Running PatchCord on a Mac
 
-Status: draft for approval · Date: 2026-06-18
+Status: IMPLEMENTED (branch feat/macos-port) · Date: 2026-06-18
+
+> Path A and Path B (B1–B4) are implemented and verified on macOS 26.5 / Apple Silicon. One item is
+> verified mechanism-only and deferred for live confirmation: the real Vencord/Equicord bundle PATCH
+> (Layer A) needs a one-time App Management / Full Disk Access grant to the packaged PatchCord.app — the
+> swap is proven byte-identical on a copy; "Discord loads a real mod" awaits a real mod install + the
+> app's first-patch grant. BetterDiscord (Layer B) is unaffected. See the Change log.
 
 Scope note: this spec carries **two paths**. Path A (build/develop on a Mac) is ready to
 implement now. Path B (genuine macOS port) is a large fork and is gated behind explicit
@@ -140,6 +146,14 @@ Goal: a double-clickable `.app`. (Design §13.)
 ---
 
 ## Change log
+- 2026-06-18 — **Path B IMPLEMENTED (B1–B4), branch feat/macos-port, 12 commits.** B1 core split +
+  IDiscordPlatform (9fb47ab); B2 MacDiscordPlatform (1a59d4d); B3a Avalonia bootstrap (f1a011e); probe
+  opt-in (7bd5f2f); B3b MainWindow/InstallRow (811cf82); B3c tray/alert/themes (4ab2c29); B3d shared
+  MonitorService (9801ec1); B3e run-at-login/single-instance/FDA onboarding (44ee9f2); B4 packaging +
+  publish-mac.sh + README (4507a98). Verified: sln 3/3 green (Windows shell stayed green throughout,
+  publish.ps1 untouched), Core builds flag-free, --mac-selftest 8/8 + b36/b37/fda harnesses pass, the
+  ad-hoc-signed PatchCord.app launches as a menu-bar agent. Deferred (mechanism-only): live Layer-A
+  real-bundle patch + real-mod load — needs a mod install + the app's one-time App-Management/FDA grant.
 - 2026-06-18 — B2 done (commit 1a59d4d) + **TCC CORRECTION.** MacDiscordPlatform implemented & green
   (8/8 self-test, process control + ShipIt probe live, swap byte-identical on a copy). Discovered the B0
   spike was WRONG: Layer A bundle writes are blocked by macOS App-Management/`com.apple.provenance` TCC
