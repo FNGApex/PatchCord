@@ -61,7 +61,13 @@ internal static class MacAppState
         _cfg = AppConfig.Load(ConfigFile, () => Platform.DiscoverInstalls().ToList());
         if (isFirstRun)
         {
+            // Mac-only first-run defaults (do NOT touch Core's Windows-shared defaults):
+            //  - Discord palette to match the reference screenshots;
+            //  - BetterDiscord as the client mod — Vencord/Equicord are parked on macOS
+            //    (Rosetta), so BetterDiscord (BandagedBD) is the supported mac mod.
             _cfg.Ui.Theme = "Discord";
+            _cfg.ClientMod = "betterdiscord";
+            foreach (var inst in _cfg.Installs) inst.ClientMod = "betterdiscord";
             _cfg.Save(ConfigFile);
         }
         return _cfg;

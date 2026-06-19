@@ -16,6 +16,11 @@ public sealed partial class App : Application
     internal static NativeMenuItem? TrayToggleItem { get; private set; }
     internal static NativeMenuItem? TrayHeaderItem { get; private set; }
 
+    // True only while an explicit Quit is in flight. The MainWindow's Closing handler
+    // reads this to decide whether to hide-to-tray (window close) or allow the close
+    // (real app shutdown). Without it, OnExplicitShutdown + close-to-tray would trap Quit.
+    internal static bool IsQuitting { get; private set; }
+
     // Reference to the main window so the tray Show action can bring it to front.
     private MainWindow? _mainWindow;
     private MainViewModel? _vm;
@@ -39,6 +44,11 @@ public sealed partial class App : Application
             // Update tray labels now that VM is available.
             UpdateTrayHeader();
             UpdateTrayToggleLabel();
+
+            // Tray app: closing the window must NOT quit the process — it hides to the
+            // menu-bar tray and monitoring keeps running. Only the tray "Quit" (App.Quit)
+            // shuts down explicitly. MainWindow.Closing cancels + hides unless IsQuitting.
+            desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnExplicitShutdown;
 
             // Create and initialize the window
             _mainWindow = new MainWindow();
@@ -139,6 +149,9 @@ public sealed partial class App : Application
     /// </summary>
     internal static void Quit()
     {
+        // Mark the explicit-quit path so MainWindow.Closing lets the window close
+        // (under OnExplicitShutdown) instead of cancelling + hiding to tray.
+        IsQuitting = true;
         if (Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime lt)
             lt.Shutdown();
     }

@@ -18,7 +18,8 @@ public sealed partial class InstallRow : UserControl
     /// Populate the row from a view-model + palette.
     /// Called from MainWindow after the VM is bound.
     /// </summary>
-    internal void Bind(InstallRowViewModel vm, MacPalette p, Action<InstallRowViewModel> onToggle, Action<InstallRowViewModel> onRemove)
+    internal void Bind(InstallRowViewModel vm, MacPalette p, Action<InstallRowViewModel> onToggle, Action<InstallRowViewModel> onRemove,
+                       Action<InstallRowViewModel, string> onModChange)
     {
         RowName.Text = vm.Name;
         RowName.Foreground = MacTheme.Brush(p.Text);
@@ -66,6 +67,18 @@ public sealed partial class InstallRow : UserControl
         // ControlTheme (defaults: GhostHover idle, Text text). Setting them locally would
         // override the theme's :pointerover/:pressed setters, breaking hover/press.
         RowModBtn.Content = vm.ModLabel + "  ▾";
+
+        // Per-install mod picker (B1): a MenuFlyout opens on click; selecting routes
+        // through onModChange (sets the install's mod, saves, re-arms patching, refreshes).
+        var flyout = new MenuFlyout();
+        foreach (var (mod, title, _) in MainViewModel.ClientModItems)
+        {
+            var capturedMod = mod;
+            var item = new MenuItem { Header = title };
+            item.Click += (_, _) => onModChange(vm, capturedMod);
+            flyout.Items.Add(item);
+        }
+        RowModBtn.Flyout = flyout;
 
         // Toggle button
         RowToggle.Content = vm.ToggleLabel;

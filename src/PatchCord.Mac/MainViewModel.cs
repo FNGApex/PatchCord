@@ -58,6 +58,23 @@ internal sealed class MainViewModel : INotifyPropertyChanged
         Save();
     }
 
+    /// <summary>
+    /// Set the client mod for a single install (per-install override) and save.
+    /// Mirrors the Windows shell's per-install picker — does NOT touch the global default.
+    /// </summary>
+    public void SetInstallMod(InstallRowViewModel row, string mod)
+    {
+        if (row.ClientMod == mod) return;
+        row.ClientMod = mod;   // mutates the underlying _cfg.Installs entry
+        _cfg.ClientMod = mod;  // keep the global default (and the Options selection) in sync
+        Save();
+        OnPropertyChanged(nameof(ClientMod));
+        OnPropertyChanged(nameof(ModMissingWarningVisible));
+        OnPropertyChanged(nameof(ModMissingWarningText));
+        OnPropertyChanged(nameof(ModMissingGetLabel));
+        OnPropertyChanged(nameof(ModMissingGetUrl));
+    }
+
     // ── Patch history ─────────────────────────────────────────────────────────
 
     public IReadOnlyList<PatchEvent> History => _cfg.History;
@@ -123,6 +140,37 @@ internal sealed class MainViewModel : INotifyPropertyChanged
             return $"Some installs use mods that aren't installed yet ({string.Join(", ", missing.Select(m => m switch { "equicord" => "Equicord", "betterdiscord" => "BetterDiscord", _ => "Vencord" }))}). Run each one's installer once so this app can keep them injected.";
         }
     }
+
+    /// <summary>The first enabled install's mod that isn't installed on disk, or null.</summary>
+    private string? FirstMissingMod() =>
+        _cfg.Installs
+            .Where(i => i.Enabled && i.ClientMod != "none" && !MacAppState.ModInstalled(i.ClientMod))
+            .Select(i => i.ClientMod)
+            .FirstOrDefault();
+
+    /// <summary>CTA label for the mod-missing banner — reflects the actual missing mod (B2).</summary>
+    public string ModMissingGetLabel
+    {
+        get
+        {
+            var label = FirstMissingMod() switch
+            {
+                "equicord"      => "Equicord",
+                "betterdiscord" => "BetterDiscord",
+                "vencord"       => "Vencord",
+                _               => "mod",
+            };
+            return $"Get {label}";
+        }
+    }
+
+    /// <summary>Install-page URL for the first missing mod (mirrors the Windows shell).</summary>
+    public string ModMissingGetUrl => FirstMissingMod() switch
+    {
+        "equicord"      => "https://github.com/Equicord/Equicord#installing--uninstalling",
+        "betterdiscord" => "https://betterdiscord.app/",
+        _               => "https://vencord.dev/download/",
+    };
 
     // ── Options tab — Client mod ──────────────────────────────────────────────
 

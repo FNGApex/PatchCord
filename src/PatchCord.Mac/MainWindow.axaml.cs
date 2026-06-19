@@ -70,6 +70,18 @@ public sealed partial class MainWindow : Window
             FdaOnboarding.ShowOnboarding(install, monitorRef, MacAppState.Config);
         };
 
+        // Close-to-tray (B3): the red traffic-light / Cmd-W hides the window and keeps
+        // the app + monitor loop alive in the menu-bar tray. App.Quit (tray Quit) sets
+        // IsQuitting so a real shutdown is allowed through.
+        Closing += (_, e) =>
+        {
+            if (!App.IsQuitting)
+            {
+                e.Cancel = true;
+                Hide();
+            }
+        };
+
         // Tab switching
         TabStatusBtn.Click  += (_, _) => SwitchTab("status");
         TabOptionsBtn.Click += (_, _) => SwitchTab("options");
@@ -87,6 +99,19 @@ public sealed partial class MainWindow : Window
 
         // Refresh button
         BtnRefresh.Click += (_, _) => RefreshInstallRows();
+
+        // Mod-missing CTA (B2): opens the install page for the first missing mod.
+        // Label is set in UpdateStatusUi so it reflects the actual missing mod.
+        BtnGetMod.Click += (_, _) =>
+        {
+            if (_vm == null) return;
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                    "open", $"\"{_vm.ModMissingGetUrl}\"") { UseShellExecute = false });
+            }
+            catch (Exception ex) { Log.Write($"Open mod URL failed: {ex.Message}", "WARN"); }
+        };
 
         // Options — OpenAsar toggle
         BtnOpenAsar.Click += (_, _) =>
@@ -278,7 +303,10 @@ public sealed partial class MainWindow : Window
         // Mod missing warning
         ModWarn.IsVisible = _vm.ModMissingWarningVisible;
         if (_vm.ModMissingWarningVisible)
+        {
             ModWarnText.Text = _vm.ModMissingWarningText;
+            BtnGetMod.Content = _vm.ModMissingGetLabel; // B2: reflect the actual missing mod
+        }
 
         // History
         BuildHistory();
@@ -357,6 +385,14 @@ public sealed partial class MainWindow : Window
                 {
                     _vm.RemoveInstall(vm.Path);
                     BuildInstallRows();
+                },
+                onModChange: (vm, mod) =>
+                {
+                    _vm.SetInstallMod(vm, mod);
+                    _monitor?.ClearFailed(vm.Path); // re-arm patching with the new mod
+                    BuildInstallRows();             // refresh label + badge
+                    UpdateStatusUi();               // re-evaluate the mod-missing warning
+                    UpdateOptionsUi();              // B4: sync the Options client-mod selection
                 });
             InstallList.Children.Add(row);
         }
