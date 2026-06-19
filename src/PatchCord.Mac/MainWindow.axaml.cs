@@ -6,8 +6,7 @@ namespace PatchCord;
 
 /// <summary>
 /// Main window for PatchCord.Mac — two-tab (Status + Options).
-/// Static UI + binding + options persistence (B3b).
-/// No live monitor loop; Status tab reflects on-disk state at load + manual Refresh.
+/// B3d: drives the MonitorService reconciliation loop via an Avalonia DispatcherTimer.
 /// </summary>
 public sealed partial class MainWindow : Window
 {
@@ -17,6 +16,10 @@ public sealed partial class MainWindow : Window
 
     private MainViewModel? _vm;
     private string _activeTab = "status";
+
+    // Monitor loop (B3d).
+    private MonitorService? _monitor;
+    private DispatcherTimer? _monitorTimer;
 
     public MainWindow()
     {
@@ -44,15 +47,25 @@ public sealed partial class MainWindow : Window
     {
         _vm = vm;
 
+        // Build the monitor service (B3d).
+        var cfg = MacAppState.Config;
+        _monitor = new MonitorService(
+            MacAppState.Platform,
+            MacAppState.BaseDir,
+            msg => MacAlert.Show(cfg, msg));
+
         // Tab switching
         TabStatusBtn.Click  += (_, _) => SwitchTab("status");
         TabOptionsBtn.Click += (_, _) => SwitchTab("options");
 
-        // Monitoring toggle (display-only this slice; no loop)
+        // Monitoring toggle: flip the flag, persist, reset monitor state, restart the timer.
         BtnToggle.Click += (_, _) =>
         {
             if (_vm == null) return;
             _vm.MonitoringEnabled = !_vm.MonitoringEnabled;
+            MacAppState.Save();
+            _monitor?.Reset();
+            SetMonitorTimer(_vm.MonitoringEnabled);
             UpdateStatusUi();
         };
 
@@ -129,9 +142,45 @@ public sealed partial class MainWindow : Window
         BuildInstallRows();
         SwitchTab("status");
 
+        // Start the monitor timer if monitoring is enabled (B3d).
+        SetMonitorTimer(_vm.MonitoringEnabled);
+
         // Uitest: report what rendered
         if (AutoCloseAfterMs > 0)
             ReportUiTestInfo();
+    }
+
+    // ── Monitor loop (B3d) ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Start or stop the monitor timer. Interval = max(5, cfg.IntervalSeconds).
+    /// A tick calls <see cref="MonitorService.RunOnce"/>, saves if recorded, refreshes UI.
+    /// </summary>
+    private void SetMonitorTimer(bool enabled)
+    {
+        _monitorTimer?.Stop();
+        _monitorTimer = null;
+        if (!enabled || _monitor == null) return;
+
+        var cfg = MacAppState.Config;
+        int iv = Math.Max(5, cfg.IntervalSeconds);
+        _monitorTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(iv) };
+        _monitorTimer.Tick += (_, _) =>
+        {
+            try
+            {
+                var r = _monitor.RunOnce(cfg);
+                if (r.Recorded) MacAppState.Save();
+                UpdateStatusUi();
+                BuildInstallRows();
+            }
+            catch (Exception ex)
+            {
+                Log.Write($"Monitor error: {ex.Message}", "ERROR");
+            }
+        };
+        _monitorTimer.Start();
+        Log.Write($"Monitor timer started (interval={iv}s).", "INFO");
     }
 
     // ── Tab switching ─────────────────────────────────────────────────────────
@@ -241,6 +290,7 @@ public sealed partial class MainWindow : Window
                 onToggle: vm =>
                 {
                     _vm.ToggleInstallEnabled(vm);
+                    _monitor?.ClearFailed(vm.Path); // re-arm patching for this install
                     BuildInstallRows();
                 },
                 onRemove: vm =>
@@ -320,6 +370,7 @@ public sealed partial class MainWindow : Window
             {
                 if (_vm == null) return;
                 _vm.ClientMod = capturedMod;
+                _monitor?.ClearAllFailed(); // re-arm patching after changing the mod for all installs
                 UpdateOptionsUi();
                 BuildInstallRows();
             };
