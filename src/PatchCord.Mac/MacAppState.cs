@@ -25,10 +25,20 @@ internal static class MacAppState
 
     // ── Platform ──────────────────────────────────────────────────────────────
 
+    private static IDiscordPlatform _platform = new MacDiscordPlatform();
+
     /// <summary>
     /// The macOS IDiscordPlatform implementation.
     /// </summary>
-    public static readonly IDiscordPlatform Platform = new MacDiscordPlatform();
+    public static IDiscordPlatform Platform => _platform;
+
+    /// <summary>
+    /// Replace the active platform instance.
+    /// Called by Program.Main (B3.7) when TryAcquireSingleInstance was called on a
+    /// freshly-constructed MacDiscordPlatform — we swap it in so the lock file stream
+    /// lives for the process lifetime.
+    /// </summary>
+    internal static void SetPlatform(IDiscordPlatform platform) => _platform = platform;
 
     // ── Config ────────────────────────────────────────────────────────────────
 

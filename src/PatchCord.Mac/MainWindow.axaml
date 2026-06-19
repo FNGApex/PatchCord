@@ -150,6 +150,21 @@
                       CornerRadius="8"/>
             </Grid>
 
+            <!-- Permissions (B3.9) -->
+            <TextBlock Text="Permissions" FontSize="12" FontWeight="Medium" Margin="4,28,0,8"/>
+            <Grid Margin="2,0,0,0" ColumnDefinitions="*,Auto">
+              <StackPanel Grid.Column="0" MaxWidth="620">
+                <TextBlock Text="Full Disk Access / App Management" FontSize="14" FontWeight="SemiBold"/>
+                <TextBlock Text="PatchCord needs App Management (or Full Disk Access) to patch Discord's app bundle on macOS. Grant it once in System Settings. Click to check guidance."
+                           FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"/>
+              </StackPanel>
+              <Button x:Name="BtnCheckPermissions" Grid.Column="1" Content="Check"
+                      Width="70" Height="30"
+                      VerticalAlignment="Top"
+                      FontSize="11" FontWeight="SemiBold"
+                      CornerRadius="8"/>
+            </Grid>
+
             <!-- Check interval -->
             <TextBlock Text="Check interval" FontSize="12" FontWeight="Medium" Margin="4,28,0,8"/>
             <Grid Margin="2,0,0,0" ColumnDefinitions="*,Auto">

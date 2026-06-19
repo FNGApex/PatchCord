@@ -139,7 +139,16 @@ public sealed class MonitorService
     /// Returns a <see cref="MonitorResult"/> the caller can use to decide whether
     /// to <c>Save()</c> and to refresh the UI.
     /// </summary>
-    public MonitorResult RunOnce(AppConfig cfg)
+    /// <param name="cfg">Current app configuration.</param>
+    /// <param name="onPatchError">
+    /// Optional callback invoked when a patch operation throws.
+    /// Receives the <see cref="Install"/> that failed and the exception.
+    /// Default null → Windows behavior: back-off is added and the error is logged;
+    /// nothing else changes.  The Mac shell passes a handler that detects permission
+    /// errors (UnauthorizedAccessException / EPERM IOException) and shows the FDA
+    /// onboarding UI.  Core is kept platform-neutral; the handler lives in the shell.
+    /// </param>
+    public MonitorResult RunOnce(AppConfig cfg, Action<Install, Exception>? onPatchError = null)
     {
         bool wantOpenAsar = cfg.OpenAsar;
         var states = new Dictionary<string, InstallState>();
@@ -259,9 +268,14 @@ public sealed class MonitorService
                     catch (Exception ex)
                     {
                         // Back off so we don't kill Discord again on the next check.
+                        // This is the UNCHANGED Windows behavior: add to failed set + log.
                         _patchFailed.Add(c.Path);
                         Log.Write($"Failed to patch {c.Name}: {ex.Message}. Leaving it alone. " +
                                   "Re-run that mod's installer, then toggle the install off and on.", "ERROR");
+                        // Optional shell-supplied handler (B3.9). Default null → no change to
+                        // Windows behavior. Mac shell passes a handler that detects EPERM and
+                        // shows FDA onboarding. Core stays platform-neutral.
+                        onPatchError?.Invoke(c, ex);
                     }
                 }
                 // Always restart Discord if we stopped it, even on a patch failure.

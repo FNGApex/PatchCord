@@ -21,6 +21,9 @@ public sealed partial class MainWindow : Window
     private MonitorService? _monitor;
     private DispatcherTimer? _monitorTimer;
 
+    // B3.9: FDA onboarding handler — set in Initialize(), passed to RunOnce().
+    private Action<Install, Exception>? _fdaErrorHandler;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -48,11 +51,21 @@ public sealed partial class MainWindow : Window
         _vm = vm;
 
         // Build the monitor service (B3d).
+        // B3.9: pass the FDA onboarding handler as onPatchError.
         var cfg = MacAppState.Config;
         _monitor = new MonitorService(
             MacAppState.Platform,
             MacAppState.BaseDir,
             msg => MacAlert.Show(cfg, msg));
+        // FDA onboarding handler — captured in a local so the closure captures the
+        // final _monitor reference. Detects EPERM/UnauthorizedAccess and shows the
+        // onboarding window with the Re-check / retry button.
+        var monitorRef = _monitor;
+        _fdaErrorHandler = (install, ex) =>
+        {
+            if (!FdaOnboarding.IsPermissionError(ex)) return;
+            FdaOnboarding.ShowOnboarding(install, monitorRef, MacAppState.Config);
+        };
 
         // Tab switching
         TabStatusBtn.Click  += (_, _) => SwitchTab("status");
@@ -86,6 +99,13 @@ public sealed partial class MainWindow : Window
             if (_vm == null) return;
             _vm.RunAtLogin = !_vm.RunAtLogin;
             UpdateOptionsUi();
+        };
+
+        // Options — Check permissions (B3.9 user-initiated FDA guidance)
+        // Does NOT auto-probe the bundle — just shows guidance + deep-link buttons.
+        BtnCheckPermissions.Click += (_, _) =>
+        {
+            FdaOnboarding.ShowGuidance(MacAppState.Config);
         };
 
         // Options — Notifications toggle
@@ -165,11 +185,14 @@ public sealed partial class MainWindow : Window
         var cfg = MacAppState.Config;
         int iv = Math.Max(5, cfg.IntervalSeconds);
         _monitorTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(iv) };
+        var fdaHandler = _fdaErrorHandler; // capture for closure
         _monitorTimer.Tick += (_, _) =>
         {
             try
             {
-                var r = _monitor.RunOnce(cfg);
+                // B3.9: pass the FDA onboarding handler so permission errors show
+                // the onboarding window rather than silently backing off.
+                var r = _monitor.RunOnce(cfg, onPatchError: fdaHandler);
                 if (r.Recorded) MacAppState.Save();
                 UpdateStatusUi();
                 BuildInstallRows();
