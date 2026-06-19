@@ -89,6 +89,22 @@ public static class OpenAsarEngine
         return $"downloaded={bytes.Length} bytes; detected={IsInstalled(resourcesDir)}";
     }
 
+    /// <summary>
+    /// Test-only helper (B5.4): fetches OpenAsar bytes and reports the cache mtime
+    /// before and after so callers can assert cache-hit vs re-download behaviour.
+    /// Returns (bytes, cacheMtimeBefore, cacheMtimeAfter).
+    /// This is additive and purely platform-neutral (file IO + HttpClient); no
+    /// existing method signatures changed.
+    /// </summary>
+    public static (byte[] Bytes, DateTime MtimeBefore, DateTime MtimeAfter) FetchWithCacheTimestamps(string cacheDir)
+    {
+        var cache = Path.Combine(cacheDir, "openasar.asar");
+        var mtimeBefore = File.Exists(cache) ? File.GetLastWriteTimeUtc(cache) : DateTime.MinValue;
+        var bytes = GetOpenAsarBytes(cacheDir);
+        var mtimeAfter = File.Exists(cache) ? File.GetLastWriteTimeUtc(cache) : DateTime.MinValue;
+        return (bytes, mtimeBefore, mtimeAfter);
+    }
+
     // Cached locally for 12h; falls back to a stale cache if the download fails.
     // <paramref name="cacheDir"/> is the directory where openasar.asar is stored.
     private static byte[] GetOpenAsarBytes(string cacheDir)

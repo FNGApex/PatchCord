@@ -41,6 +41,18 @@ static class Program
         if (args.Contains("--mac-b5-shipit"))
             return RunB5ShipItTest();
 
+        // B5.2: BD Layer-B inject/restore on real core (FDA-free).
+        if (args.Contains("--mac-b5-bdtest"))
+            return RunB5BdTest();
+
+        // B5.4: OpenAsar FDA-free portion (download + cache TTL + detection + layering on /tmp copy).
+        if (args.Contains("--mac-b5-openasar"))
+            return RunB5OpenAsarTest();
+
+        // B5.5 + B5.6: BD re-inject after new app-<ver> + version ordering (uses PATCHCORD_APPSUPPORT_ROOT seam).
+        if (args.Contains("--mac-b5-repatch"))
+            return RunB5RepatchTest();
+
         // Any --mac-* test flag: skip single-instance check so parallel test runs
         // (or the two-pass selftest + fdatest) don't lock each other out.
         bool isMacTest = args.Any(a => a.StartsWith("--mac-", StringComparison.Ordinal));
@@ -1216,6 +1228,331 @@ static class Program
 
         Console.WriteLine();
         Console.WriteLine($"=== B5.7 ShipIt identity test results: {passed} passed, {failed} failed ===");
+        return failed == 0 ? 0 : 1;
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
+    // B5.2 — BetterDiscord Layer-B inject/restore on the REAL core (FDA-free).
+    // App-Support index.js is outside the signed bundle, so writable without FDA.
+    // The original bytes are saved and ALWAYS restored in a finally so the real
+    // install is left exactly as found. Does NOT stop/start Discord.
+    // ────────────────────────────────────────────────────────────────────────────
+
+    static int RunB5BdTest()
+    {
+        Console.WriteLine("=== PatchCord.Mac B5.2 BetterDiscord Layer-B inject/restore test ===");
+        Console.WriteLine();
+        int passed = 0, failed = 0;
+        var platform = new MacDiscordPlatform();
+
+        // B5.2-1: BetterDiscordAsarPath resolves to the expected macOS location.
+        {
+            var tag = "B5.2-1";
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var expected = Path.Combine(home, "Library", "Application Support", "BetterDiscord", "data", "betterdiscord.asar");
+            if (platform.BetterDiscordAsarPath == expected)
+                Pass(tag, $"BetterDiscordAsarPath = {expected}", ref passed);
+            else
+                Fail(tag, $"BetterDiscordAsarPath = '{platform.BetterDiscordAsarPath}', expected '{expected}'", ref failed);
+        }
+
+        // B5.2-2/3: inject then restore on the real core; restore original bytes in finally.
+        // Resolve the core dir once; both sub-checkpoints share it.
+        var discord = platform.DiscoverInstalls().FirstOrDefault(i => i.Branch == "Discord");
+        string? coreAppDir = discord != null ? platform.ResolveCoreAppDir(discord) : null;
+        string? indexJs = null;
+        byte[]? originalBytes = null;
+        const string vanilla = "module.exports = require('./core.asar');\n";
+
+        // B5.2-2: inject — exercises the Core write logic (independent of BD asar presence,
+        // which is reported but not required here; real BD load is B5.3).
+        {
+            var tag = "B5.2-2";
+            try
+            {
+                if (coreAppDir == null)
+                    Fail(tag, "No Discord core dir (DiscoverInstalls/ResolveCoreAppDir returned null).", ref failed);
+                else if ((indexJs = BetterDiscordEngine.FindCoreIndexJs(coreAppDir)) == null)
+                    Fail(tag, $"FindCoreIndexJs null under {coreAppDir}.", ref failed);
+                else
+                {
+                    originalBytes = File.ReadAllBytes(indexJs);
+                    var asarPath = platform.BetterDiscordAsarPath;
+                    bool asarPresent = File.Exists(asarPath);
+                    Console.WriteLine($"    index.js: {indexJs}");
+                    Console.WriteLine($"    BD asar present on disk: {asarPresent}  ({asarPath})");
+                    if (!asarPresent)
+                        Console.WriteLine("    NOTE: BD asar absent — this checkpoint validates inject/restore WRITE logic only; " +
+                                          "real BD load requires the asar installed (B5.3).");
+                    Console.WriteLine($"    saved original ({originalBytes.Length} bytes)");
+
+                    // Inject only writes the require() line; the target need not exist on disk.
+                    BetterDiscordEngine.Inject(coreAppDir, asarPath);
+                    var afterInject = File.ReadAllText(indexJs);
+                    var expectedContent = BetterDiscordEngine.InjectContent(asarPath);
+                    if (afterInject == expectedContent && afterInject.Contains("betterdiscord.asar"))
+                        Pass(tag, "Inject wrote the BD require line == InjectContent (contains betterdiscord.asar).", ref passed);
+                    else
+                        Fail(tag, $"index.js after Inject != InjectContent.\n  got:  {afterInject}\n  want: {expectedContent}", ref failed);
+                }
+            }
+            catch (Exception ex) { Fail(tag, ex.ToString(), ref failed); }
+        }
+
+        // B5.2-3: restore → byte-exact vanilla. Own try so a Restore failure is attributed
+        // here (not to B5.2-2); finally ALWAYS puts the real install back exactly as found.
+        {
+            var tag = "B5.2-3";
+            try
+            {
+                if (coreAppDir == null || indexJs == null)
+                    Fail(tag, "Skipped — no core dir/index.js (depends on B5.2-2).", ref failed);
+                else
+                {
+                    BetterDiscordEngine.Restore(coreAppDir);
+                    var afterRestore = File.ReadAllText(indexJs);
+                    if (afterRestore == vanilla)
+                        Pass(tag, $"Restore wrote byte-exact vanilla ({vanilla.Length} bytes).", ref passed);
+                    else
+                        Fail(tag, $"Restore mismatch.\n  got ({afterRestore.Length}):  {afterRestore}\n  want ({vanilla.Length}): {vanilla}", ref failed);
+                }
+            }
+            catch (Exception ex) { Fail(tag, ex.ToString(), ref failed); }
+            finally
+            {
+                if (indexJs != null && originalBytes != null)
+                {
+                    try
+                    {
+                        File.WriteAllBytes(indexJs, originalBytes);
+                        Console.WriteLine($"    [cleanup] original index.js restored: {File.ReadAllBytes(indexJs).SequenceEqual(originalBytes)}");
+                    }
+                    catch (Exception ex) { Console.WriteLine($"    [cleanup] FAILED to restore index.js: {ex.Message}"); }
+                }
+            }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"=== B5.2 results: {passed} passed, {failed} failed ===");
+        return failed == 0 ? 0 : 1;
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
+    // B5.4 — OpenAsar FDA-free portion: download + 12h cache TTL + positive byte-scan
+    // detection + on-copy layering. NEVER writes the real /Applications bundle — all
+    // asar writes go to a /tmp Resources copy. (Live bundle install is FDA-gated, parked.)
+    // ────────────────────────────────────────────────────────────────────────────
+
+    static int RunB5OpenAsarTest()
+    {
+        Console.WriteLine("=== PatchCord.Mac B5.4 OpenAsar FDA-free portion test ===");
+        Console.WriteLine();
+        int passed = 0, failed = 0;
+
+        var tmpRoot = Path.Combine(Path.GetTempPath(), "patchcord_b5_openasar_" + Guid.NewGuid().ToString("N"));
+        var cacheDir = Path.Combine(tmpRoot, "cache");
+        var resourcesDir = Path.Combine(tmpRoot, "Resources");
+        try
+        {
+            Directory.CreateDirectory(cacheDir);
+            Directory.CreateDirectory(resourcesDir);
+
+            // B5.4-1: download + 12h cache TTL (cache hit vs re-download).
+            {
+                var tag = "B5.4-1";
+                try
+                {
+                    var cacheFile = Path.Combine(cacheDir, "openasar.asar");
+                    var f1 = OpenAsarEngine.FetchWithCacheTimestamps(cacheDir);   // empty cache → downloads
+                    if (f1.Bytes.Length == 0 || !File.Exists(cacheFile))
+                    { Fail(tag, $"First fetch did not download/cache (bytes={f1.Bytes.Length}).", ref failed); goto afterTtl; }
+                    Console.WriteLine($"    first fetch: {f1.Bytes.Length} bytes cached");
+
+                    // Fresh cache → HIT (mtime unchanged across the fetch).
+                    File.SetLastWriteTimeUtc(cacheFile, DateTime.UtcNow);
+                    var fresh = OpenAsarEngine.FetchWithCacheTimestamps(cacheDir);
+                    bool cacheHit = fresh.MtimeBefore == fresh.MtimeAfter;
+
+                    // Backdate > 12h → re-download (mtime advances).
+                    File.SetLastWriteTimeUtc(cacheFile, DateTime.UtcNow.AddHours(-13));
+                    var stale = OpenAsarEngine.FetchWithCacheTimestamps(cacheDir);
+                    bool reDownloaded = stale.MtimeAfter > stale.MtimeBefore;
+
+                    Console.WriteLine($"    fresh→hit={cacheHit}  stale(>12h)→reDownloaded={reDownloaded}");
+                    if (cacheHit && reDownloaded)
+                        Pass(tag, "12h cache TTL correct: fresh→cache hit, stale(>12h)→re-download.", ref passed);
+                    else
+                        Fail(tag, $"Cache TTL wrong: cacheHit={cacheHit} reDownloaded={reDownloaded}", ref failed);
+                }
+                catch (Exception ex) { Fail(tag, $"download/cache error (network needed?): {ex.Message}", ref failed); }
+                afterTtl:;
+            }
+
+            // B5.4-2: positive byte-scan detection on a /tmp copy of the real app.asar.
+            {
+                var tag = "B5.4-2";
+                try
+                {
+                    var platform = new MacDiscordPlatform();
+                    var discord = platform.DiscoverInstalls().FirstOrDefault(i => i.Branch == "Discord");
+                    var realResources = discord != null ? platform.ResolveResourcesDir(discord) : null;
+                    if (realResources == null) { Fail(tag, "No real Discord resources dir to copy app.asar from.", ref failed); goto afterDetect; }
+                    File.Copy(Path.Combine(realResources, "app.asar"), Path.Combine(resourcesDir, "app.asar"), overwrite: true);
+
+                    OpenAsarEngine.Install(resourcesDir, cacheDir);   // writes the /tmp app.asar, NOT the real bundle
+                    if (OpenAsarEngine.IsInstalled(resourcesDir))
+                        Pass(tag, "OpenAsar installed into /tmp copy; IsInstalled=true (positive byte-scan detection).", ref passed);
+                    else
+                        Fail(tag, "IsInstalled=false after Install into /tmp copy.", ref failed);
+                }
+                catch (Exception ex) { Fail(tag, ex.ToString(), ref failed); }
+                afterDetect:;
+            }
+
+            // B5.4-3: layering — OpenAsar survives a Layer-A Patch/Unpatch round-trip.
+            {
+                var tag = "B5.4-3";
+                try
+                {
+                    if (!File.Exists(Path.Combine(resourcesDir, "app.asar")))
+                    { Fail(tag, "depends on B5.4-2 (no /tmp app.asar).", ref failed); goto afterLayer; }
+                    var patcherDir = Path.Combine(tmpRoot, "Vencord", "dist");
+                    Directory.CreateDirectory(patcherDir);
+                    var patcherJs = Path.Combine(patcherDir, "patcher.js");
+                    File.WriteAllText(patcherJs, "module.exports = () => {};");
+                    var stub = PatchEngine.BuildStubAsar(patcherJs);
+
+                    PatchEngine.Patch(resourcesDir, stub);   // app.asar(OpenAsar) → _app.asar, stub → app.asar
+                    PatchEngine.Unpatch(resourcesDir);       // _app.asar(OpenAsar) → app.asar
+                    if (OpenAsarEngine.IsInstalled(resourcesDir))
+                        Pass(tag, "OpenAsar layer survived a Layer-A Patch/Unpatch round-trip (still detected).", ref passed);
+                    else
+                        Fail(tag, "OpenAsar no longer detected after Patch/Unpatch — layering invariant broken.", ref failed);
+                }
+                catch (Exception ex) { Fail(tag, ex.ToString(), ref failed); }
+                afterLayer:;
+            }
+        }
+        finally
+        {
+            try { if (Directory.Exists(tmpRoot)) Directory.Delete(tmpRoot, recursive: true); } catch { }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"=== B5.4 results: {passed} passed, {failed} failed ===");
+        return failed == 0 ? 0 : 1;
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
+    // B5.5 + B5.6 — monitor re-patch targeting + version ordering, via the
+    // PATCHCORD_APPSUPPORT_ROOT seam pointed at a /tmp fixture (no real-tree mutation).
+    // B5.5: after a higher app-<ver> appears, ResolveCoreAppDir targets it and BD
+    //       injects into the NEW dir (the re-patch-after-update invariant).
+    // B5.6: GetLatestCoreAppDir orders numerically (0.0.10 > 0.0.9), ignores non-X.Y.Z.
+    // ────────────────────────────────────────────────────────────────────────────
+
+    static int RunB5RepatchTest()
+    {
+        Console.WriteLine("=== PatchCord.Mac B5.5/B5.6 re-patch + version-ordering test ===");
+        Console.WriteLine();
+        int passed = 0, failed = 0;
+        var origEnv = Environment.GetEnvironmentVariable("PATCHCORD_APPSUPPORT_ROOT");
+        string? fixtureRoot = null;
+        const string vanilla = "module.exports = require('./core.asar');\n";
+        try
+        {
+            fixtureRoot = Path.Combine(Path.GetTempPath(), "patchcord_b5_repatch_" + Guid.NewGuid().ToString("N"));
+
+            // Write a vanilla wrapped core at <root>/<branchDir>/app-<ver>/modules/...
+            void MakeCore(string branchDir, string ver)
+            {
+                var coreDir = Path.Combine(fixtureRoot!, branchDir, "app-" + ver,
+                    "modules", "discord_desktop_core-1", "discord_desktop_core");
+                Directory.CreateDirectory(coreDir);
+                File.WriteAllText(Path.Combine(coreDir, "index.js"), vanilla);
+            }
+
+            Environment.SetEnvironmentVariable("PATCHCORD_APPSUPPORT_ROOT", fixtureRoot);
+
+            // B5.5: a higher app-<ver> appears → the monitor loop targets it, BD injects there.
+            {
+                var tag = "B5.5";
+                try
+                {
+                    MakeCore("discord", "0.0.395");
+                    MakeCore("discord", "0.0.999");
+                    var platform = new MacDiscordPlatform();
+                    var inst = new Install
+                    {
+                        Name = "Discord", Branch = "Discord",
+                        // Real bundle path so ResolveResourcesDir/Installed succeed (read-only here —
+                        // monitoring is OFF below, so nothing writes/stops the real Discord).
+                        Path = "/Applications/Discord.app",
+                        Custom = false, Enabled = true, ClientMod = "betterdiscord",
+                    };
+
+                    var resolved = platform.ResolveCoreAppDir(inst);
+                    if (resolved == null || !resolved.Contains("app-0.0.999"))
+                    { Fail(tag, $"ResolveCoreAppDir='{resolved}', expected the higher app-0.0.999.", ref failed); goto afterRepatch; }
+
+                    // (a) MonitorService.RunOnce smoke with monitoring OFF: exercises the loop's
+                    // reconciliation over the fixture WITHOUT stopping/patching/restarting the real
+                    // Discord (the patch block is gated on cfg.MonitoringEnabled). Proves the loop
+                    // observes the NEW app-0.0.999 core via ResolveCoreAppDir and does not patch.
+                    var monitor = new MonitorService(platform, Path.GetTempPath(), _ => { });
+                    var cfg = new AppConfig { Installs = new List<Install> { inst }, MonitoringEnabled = false, ClientMod = "betterdiscord" };
+                    var result = monitor.RunOnce(cfg);
+                    bool loopSawNewCore = monitor.LastStates.TryGetValue(inst.Path, out var st)
+                        && st.AppDir != null && st.AppDir.Contains("app-0.0.999");
+                    bool didNotPatch = !result.Recorded;
+
+                    // (b) Direct re-inject invariant: BD injects into the resolved NEW dir; old stays vanilla.
+                    BetterDiscordEngine.Inject(resolved, platform.BetterDiscordAsarPath);
+                    var newIdx = BetterDiscordEngine.FindCoreIndexJs(resolved)!;
+                    bool injectedNew = File.ReadAllText(newIdx).Contains("betterdiscord.asar");
+                    var oldIdx = Path.Combine(fixtureRoot!, "discord", "app-0.0.395",
+                        "modules", "discord_desktop_core-1", "discord_desktop_core", "index.js");
+                    bool oldVanilla = File.ReadAllText(oldIdx) == vanilla;
+
+                    Console.WriteLine($"    loopSawNewCore={loopSawNewCore} didNotPatch(monitoring off)={didNotPatch} injectedNew={injectedNew} oldVanilla={oldVanilla}");
+                    if (loopSawNewCore && didNotPatch && injectedNew && oldVanilla)
+                        Pass(tag, "MonitorService.RunOnce reconciles over the new app-0.0.999 core (targets it; no patch while monitoring off); BD re-injects into the NEW dir; old app-0.0.395 untouched.", ref passed);
+                    else
+                        Fail(tag, $"loopSawNewCore={loopSawNewCore} didNotPatch={didNotPatch} injectedNew={injectedNew} oldVanilla={oldVanilla}", ref failed);
+                }
+                catch (Exception ex) { Fail(tag, ex.ToString(), ref failed); }
+                afterRepatch:;
+            }
+
+            // B5.6: numeric (not lexical) version ordering; non-X.Y.Z ignored.
+            {
+                var tag = "B5.6";
+                try
+                {
+                    MakeCore("discordcanary", "0.0.9");
+                    MakeCore("discordcanary", "0.0.10");
+                    Directory.CreateDirectory(Path.Combine(fixtureRoot!, "discordcanary", "app-weird", "modules"));
+                    var canary = new Install { Name = "Discord Canary", Branch = "DiscordCanary", Path = "/Applications/Discord Canary.app", Custom = false };
+                    var platform = new MacDiscordPlatform();
+
+                    var resolved = platform.ResolveCoreAppDir(canary);
+                    var label = platform.AppVersionLabel(canary);
+                    if (resolved != null && resolved.Contains("app-0.0.10") && label == "app-0.0.10")
+                        Pass(tag, $"Numeric ordering: picked app-0.0.10 (label={label}); ignored app-0.0.9 and non-X.Y.Z app-weird.", ref passed);
+                    else
+                        Fail(tag, $"resolved='{resolved}' label='{label}', expected app-0.0.10.", ref failed);
+                }
+                catch (Exception ex) { Fail(tag, ex.ToString(), ref failed); }
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATCHCORD_APPSUPPORT_ROOT", origEnv);
+            try { if (fixtureRoot != null && Directory.Exists(fixtureRoot)) Directory.Delete(fixtureRoot, recursive: true); } catch { }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"=== B5.5/B5.6 results: {passed} passed, {failed} failed ===");
         return failed == 0 ? 0 : 1;
     }
 
