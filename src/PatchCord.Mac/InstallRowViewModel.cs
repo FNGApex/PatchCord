@@ -65,18 +65,6 @@ internal sealed class InstallRowViewModel : INotifyPropertyChanged
 
     // ── Status badges (from InstallState) ────────────────────────────────────
 
-    public void RefreshState(InstallState state)
-    {
-        _state = state;
-        OnPropertyChanged(nameof(IsInstalled));
-        OnPropertyChanged(nameof(IsRunning));
-        OnPropertyChanged(nameof(PrimaryBadgeText));
-        OnPropertyChanged(nameof(PrimaryBadgeVisible));
-        OnPropertyChanged(nameof(OpenAsarBadgeText));
-        OnPropertyChanged(nameof(OpenAsarBadgeVisible));
-        OnPropertyChanged(nameof(ModLabel));
-    }
-
     public bool IsInstalled => _state.Installed;
     public bool IsRunning => _state.Running;
 

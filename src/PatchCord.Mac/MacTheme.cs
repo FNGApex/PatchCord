@@ -46,6 +46,17 @@ internal static class MacTheme
             },
         };
 
+    // ── Semantic badge colors (theme-independent) ─────────────────────────────
+
+    /// Neutral badge — "Other mod" / unknown state.
+    public const string BadgeNeutral = "#80848E";
+
+    /// Error badge — Discord is running but not patched.
+    public const string BadgeError   = "#F23F43";
+
+    /// Text on the neutral/error badges — always white (their backgrounds are fixed semantic colors).
+    public const string BadgeText    = "#FFFFFF";
+
     /// <summary>
     /// Resolve a palette by key, falling back to Dark.
     /// </summary>

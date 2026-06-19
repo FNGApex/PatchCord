@@ -32,14 +32,17 @@ public sealed partial class InstallRow : UserControl
             var badgeColor = vm.PrimaryBadgeText switch
             {
                 "Vencord" or "Equicord" or "BetterDiscord" => p.On,
-                "Other mod" => "#80848E",
-                _ when vm.IsRunning && vm.Enabled && vm.ClientMod != "none" => "#F23F43",
-                _ => "#80848E",
+                "Other mod" => MacTheme.BadgeNeutral,
+                _ when vm.IsRunning && vm.Enabled && vm.ClientMod != "none" => MacTheme.BadgeError,
+                _ => MacTheme.BadgeNeutral,
             };
             RowBadge.Background = MacTheme.Brush(badgeColor);
             RowStatus.Text = vm.PrimaryBadgeText;
+            // Known-mod badges sit on the theme's On color → use OnText (theme-aware).
+            // Neutral/error badges have fixed semantic backgrounds → always white text.
             RowStatus.Foreground = MacTheme.Brush(
-                vm.PrimaryBadgeText is "Vencord" or "Equicord" or "BetterDiscord" ? p.OnText : "#FFFFFF");
+                vm.PrimaryBadgeText is "Vencord" or "Equicord" or "BetterDiscord"
+                    ? p.OnText : MacTheme.BadgeText);
         }
         else
         {
@@ -59,10 +62,10 @@ public sealed partial class InstallRow : UserControl
             RowOpenAsarBadge.IsVisible = false;
         }
 
-        // Mod button
+        // Mod button — Content only; Background/Foreground are owned by the ModButton
+        // ControlTheme (defaults: GhostHover idle, Text text). Setting them locally would
+        // override the theme's :pointerover/:pressed setters, breaking hover/press.
         RowModBtn.Content = vm.ModLabel + "  ▾";
-        RowModBtn.Background = MacTheme.Brush(p.GhostHover);
-        RowModBtn.Foreground = MacTheme.Brush(p.Text);
 
         // Toggle button
         RowToggle.Content = vm.ToggleLabel;

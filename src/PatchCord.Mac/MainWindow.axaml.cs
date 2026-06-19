@@ -18,6 +18,7 @@ public sealed partial class MainWindow : Window
 
     private MainViewModel? _vm;
     private string _activeTab = "status";
+    private bool _firstRenderDone;
 
     // Monitor loop (B3d).
     private MonitorService? _monitor;
@@ -157,7 +158,28 @@ public sealed partial class MainWindow : Window
         // Build notify style chips
         BuildStyleChips();
 
-        // Initial render
+        // Defer first full render to after the window is realized (laid out + hit-testable).
+        // This fixes blank-until-refresh: controls added to the tree before the window is
+        // shown are not measured/hit-testable until after the first layout pass.
+        void OnFirstOpened(object? s, EventArgs e)
+        {
+            Opened -= OnFirstOpened;
+            RenderInitial();
+        }
+        Opened += OnFirstOpened;
+    }
+
+    /// <summary>
+    /// Runs exactly once, from the <see cref="Window.Opened"/> hook, after the window is
+    /// realized. Guarded by <see cref="_firstRenderDone"/> so a second Opened fire (e.g.
+    /// restore from minimize) cannot re-run it.
+    /// </summary>
+    private void RenderInitial()
+    {
+        if (_firstRenderDone) return;
+        _firstRenderDone = true;
+        if (_vm == null) return;
+
         ApplyPalette();
         UpdateStatusUi();
         UpdateOptionsUi();
@@ -167,7 +189,7 @@ public sealed partial class MainWindow : Window
         // Start the monitor timer if monitoring is enabled (B3d).
         SetMonitorTimer(_vm.MonitoringEnabled);
 
-        // Uitest: report what rendered
+        // Uitest: report what rendered — MUST run after BuildInstallRows() so row count > 0.
         if (AutoCloseAfterMs > 0)
             ReportUiTestInfo();
     }
