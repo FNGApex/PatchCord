@@ -463,3 +463,18 @@ Silicon:
   to a packaged/signed PatchCord.app**; the swap mechanism itself is proven byte-identical on a copy.
 
 Path B remains viable — this adds a one-time FDA grant (parity with the reference installer), not a hard blocker.
+
+**Refinement (2026-06-18, observed live):** the precise TCC service is **"App Management"**
+(`kTCCServiceSystemPolicyAppBundles`), not only Full Disk Access. When an unprivileged process attempts
+the bundle write, macOS shows a **promptable** "App Management" dialog ("<app> was prevented from
+modifying apps on your computer") and attributes it to the responsible GUI app (observed: a `dotnet`
+run launched from VS Code was attributed to "Visual Studio Code"). Implications:
+- The permission is PROMPTABLE — the first bundle-write from the packaged, signed `PatchCord.app` should
+  raise the App-Management "Allow" prompt; the user allows once and re-patching thereafter succeeds.
+  This is a smoother UX than "manually add to Full Disk Access" (FDA still works as the broader grant).
+- During development, writes from `dotnet run` are attributed to the controlling GUI app (VS Code /
+  Terminal); granting App Management (or FDA) to THAT app lets the `--mac-selftest` B2.8 probe perform
+  the real-bundle write for true live-fire verification.
+- ACTION: the `--mac-selftest` B2.8 real-bundle WRITE probe must be made OPT-IN (gated behind an explicit
+  flag, default OFF) so routine self-tests do not repeatedly raise the system prompt. The byte-identical
+  swap on a /tmp copy stays the default, non-prompting verification.

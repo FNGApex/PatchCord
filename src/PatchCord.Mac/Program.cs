@@ -19,8 +19,11 @@ static class Program
     static int Main(string[] args)
     {
         // Headless self-test (B2 checkpoints) — Avalonia is NOT started on this path.
+        // The B2.8 real-bundle WRITE probe is opt-in (--mac-selftest-write); by default
+        // the swap is proven on a /tmp copy only, so a routine self-test never trips the
+        // macOS App-Management system prompt. See design §15.
         if (args.Contains("--mac-selftest"))
-            return RunSelfTest();
+            return RunSelfTest(allowRealWrite: args.Contains("--mac-selftest-write"));
 
         // Non-blocking smoke: auto-close window after N ms then exit.
         if (args.Contains("--mac-uitest"))
@@ -43,7 +46,7 @@ static class Program
     // checkpoint and exits 0 if all pass, 1 if any fail.
     // ────────────────────────────────────────────────────────────────────────────
 
-    static int RunSelfTest()
+    static int RunSelfTest(bool allowRealWrite = false)
     {
         Console.WriteLine("=== PatchCord.Mac B2 self-test ===");
         Console.WriteLine();
@@ -245,21 +248,20 @@ static class Program
         //   real app.asar placed in /tmp.  This is unambiguous: PatchEngine.Patch/
         //   Unpatch work correctly and the copy is byte-identical to vanilla after revert.
         //
-        // Phase 2 — REAL BUNDLE attempt (best-effort):
-        //   On macOS 15+ / Tahoe (26.x), /Applications bundles carry the
-        //   com.apple.provenance xattr which causes macOS to enforce write protection
-        //   on bundle contents via a kernel-level guard, even for files the user owns
-        //   (drwxr-xr-x bear:staff), even without quarantine, and even with SIP
-        //   disabled at user-level.  Only processes with Full Disk Access TCC grant
-        //   can rename/write inside a .app bundle.  Our unsigned `dotnet run` binary
-        //   has no TCC grant, so the bundle write is expected to fail in the selftest.
-        //   When PatchCord.Mac is packaged as a real .app (B4) with
-        //   NSFullDiskAccessUsageDescription in Info.plist, the user is prompted once
-        //   and the permission is granted; subsequent writes to the bundle succeed.
+        // Phase 2 — REAL BUNDLE attempt (OPT-IN via --mac-selftest-write, default OFF):
+        //   On macOS 13+ (hardened on Tahoe 26.x), signed+notarized /Applications
+        //   bundles carry the com.apple.provenance xattr and macOS enforces the
+        //   "App Management" TCC service (kTCCServiceSystemPolicyAppBundles) on writes
+        //   to bundle contents — even for files the user owns (drwxr-xr-x bear:staff),
+        //   without quarantine. A process needs an App-Management (or Full Disk Access)
+        //   grant to rename/write inside a .app bundle. An unsigned `dotnet run` has no
+        //   such grant, so the write is blocked AND macOS raises a promptable system
+        //   dialog attributed to the controlling GUI app (VS Code/Terminal).
+        //   The packaged signed .app (B4) gets its own promptable App-Management grant
+        //   on first real patch. See design §15.
         //
-        //   The selftest attempts the real-bundle patch, reports ATTEMPTED/FAILED with
-        //   the exact error, and does NOT count a TCC write-denial as a test FAIL.
-        //   The mechanism is proven by Phase 1.
+        //   This phase is OFF by default so routine self-tests don't trip the prompt;
+        //   it never counts a TCC denial as a FAIL. The mechanism is proven by Phase 1.
         //
         // Safety: /tmp copy requires no cleanup of the real bundle; no _app.asar
         // can be left behind if the test is interrupted, because the real bundle
@@ -344,12 +346,31 @@ static class Program
                 cleanedUp = true;
                 tempVencordDir = null;
 
-                // ── Phase 2: real-bundle attempt (best-effort, TCC-gated) ────────
+                // ── Phase 2: real-bundle attempt (OPT-IN: --mac-selftest-write) ──
+                //
+                // This is the ONE operation that needs the macOS "App Management" TCC
+                // grant (kTCCServiceSystemPolicyAppBundles). Attempting it raises a
+                // system "Allow"/"prevented from modifying apps" prompt attributed to the
+                // controlling GUI app (e.g. VS Code/Terminal for `dotnet run`). It is OFF
+                // by default so routine self-tests never trip that prompt; the swap
+                // mechanism is already proven byte-identical on the /tmp copy above.
+                // The packaged signed .app (B4) gets its own promptable App-Management
+                // grant on first real patch. See design §15.
 
-                Console.WriteLine();
-                Console.WriteLine("    [Phase 2] Attempting real-bundle write (requires TCC Full Disk Access):");
                 bool realBundleOk = false;
                 string realBundleResult;
+
+                if (!allowRealWrite)
+                {
+                    realBundleResult = "SKIPPED (opt-in): pass --mac-selftest-write to attempt the real-bundle " +
+                        "rename. Default verification is the /tmp-copy mechanism proof above (no system prompt).";
+                    Console.WriteLine();
+                    Console.WriteLine($"    [Phase 2] {realBundleResult}");
+                    goto verdict;
+                }
+
+                Console.WriteLine();
+                Console.WriteLine("    [Phase 2] Attempting real-bundle write (requires macOS App-Management TCC grant):");
                 try
                 {
                     // We do NOT do a stop/start cycle here because the mechanism
@@ -371,11 +392,11 @@ static class Program
                         realBundleResult = "SUCCESS: bundle rename probe passed — Full Disk Access TCC present.";
                     }
                 }
-                catch (UnauthorizedAccessException ex)
+                catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
                 {
-                    realBundleResult = $"TCC BLOCKED (expected for unsigned dotnet run): {ex.Message}\n" +
-                        "    The real .app bundle (B4 packaging) will request Full Disk Access via\n" +
-                        "    NSFullDiskAccessUsageDescription; the user grants it once. Mechanism proven by Phase 1.";
+                    realBundleResult = $"TCC BLOCKED (expected without an App-Management grant): {ex.Message}\n" +
+                        "    Grant App Management (or Full Disk Access) to the controlling app to allow it,\n" +
+                        "    or rely on the packaged signed .app's own first-patch prompt (B4). Mechanism proven by Phase 1.";
                 }
                 catch (Exception ex)
                 {
@@ -384,6 +405,7 @@ static class Program
                 Console.WriteLine($"    {realBundleResult}");
 
                 // ── Verdict ─────────────────────────────────────────────────────
+                verdict:
 
                 if (!modOk)
                     Fail(tag, $"Phase 1: DetectMod='{detectedMod}', expected 'vencord'", ref failed);
@@ -393,7 +415,9 @@ static class Program
                     Fail(tag, "Phase 1: _app.asar still present after Unpatch on copy", ref failed);
                 else
                 {
-                    var realNote = realBundleOk ? "real-bundle probe also passed" : "real-bundle blocked by TCC (expected for dotnet run)";
+                    var realNote = !allowRealWrite ? "real-bundle write skipped (opt-in --mac-selftest-write)"
+                        : realBundleOk ? "real-bundle probe also passed"
+                        : "real-bundle blocked by App-Management TCC (expected without a grant)";
                     Pass(tag,
                         $"Phase 1 swap round-trip on /tmp copy: DetectMod=vencord, sha256 before==after, _app.asar absent.\n" +
                         $"  Phase 2 ({realNote}).\n" +
