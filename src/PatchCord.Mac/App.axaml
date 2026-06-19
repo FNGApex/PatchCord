@@ -5,6 +5,8 @@
 
     <Application.Styles>
         <FluentTheme />
+        <!-- U1: keyed ControlThemes + 13 DynamicResource palette brushes -->
+        <StyleInclude Source="avares://PatchCord.Mac/Styles.axaml"/>
     </Application.Styles>
 
     <!-- Tray icon — macOS NSStatusItem. Menu actions wired in App.axaml.cs. -->

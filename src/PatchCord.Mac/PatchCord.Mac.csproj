@@ -23,9 +23,11 @@
     <ProjectReference Include="..\PatchCord.Core\PatchCord.Core.csproj" />
   </ItemGroup>
 
-  <!-- Embed tray icon as an Avalonia asset resource. -->
+  <!-- Embed tray icon and font assets as Avalonia resources. -->
   <ItemGroup>
     <AvaloniaResource Include="Assets/**" />
+    <!-- U1: palette brush keys + keyed ControlThemes -->
+    <AvaloniaResource Include="Styles.axaml" />
   </ItemGroup>
 
 </Project>

@@ -1,5 +1,7 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using Avalonia.Styling;
 using Avalonia.Threading;
 
 namespace PatchCord;
@@ -215,9 +217,18 @@ public sealed partial class MainWindow : Window
         StatusScroll.IsVisible  = isStatus;
         OptionsScroll.IsVisible = !isStatus;
 
-        var p = CurrentPalette();
-        TabStatusBtn.Foreground  = MacTheme.Brush(isStatus  ? p.Text : p.Sub);
-        TabOptionsBtn.Foreground = MacTheme.Brush(!isStatus ? p.Text : p.Sub);
+        // Drive active/inactive appearance via Classes so the TabButton ControlTheme
+        // handles foreground + underline — no direct Foreground fight with Fluent.
+        if (isStatus)
+        {
+            TabStatusBtn.Classes.Add("active");
+            TabOptionsBtn.Classes.Remove("active");
+        }
+        else
+        {
+            TabOptionsBtn.Classes.Add("active");
+            TabStatusBtn.Classes.Remove("active");
+        }
     }
 
     // ── Status tab ────────────────────────────────────────────────────────────
@@ -230,13 +241,17 @@ public sealed partial class MainWindow : Window
 
         StatusDot.Background = MacTheme.Brush(on ? p.On : "#80848E");
         StatusText.Text = _vm.MonitoringStatusText;
-        StatusText.Foreground = MacTheme.Brush(p.Text);
+        // StatusText.Foreground and StatusSub.Foreground are DynamicResource in XAML — no repaint needed.
         StatusSub.Text = _vm.MonitoringSubText;
-        StatusSub.Foreground = MacTheme.Brush(p.Sub);
 
         BtnToggle.Content = _vm.ToggleButtonLabel;
-        BtnToggle.Background = MacTheme.Brush(on ? p.Accent : p.On);
-        BtnToggle.Foreground = MacTheme.Brush(on ? p.OnAccent : p.OnText);
+        // Swap ControlTheme: AccentPill (blue "Turn Off") when monitoring is on;
+        // OnPill (green "Turn On") when monitoring is off.
+        // Both themes use DynamicResource brushes, so live palette switching is free.
+        // Use TryFindResource so Avalonia walks the full resource chain (including Styles.Resources).
+        if (Application.Current!.TryFindResource(on ? "AccentPill" : "OnPill", out var themeObj)
+            && themeObj is ControlTheme ct)
+            BtnToggle.Theme = ct;
 
         // Mod missing warning
         ModWarn.IsVisible = _vm.ModMissingWarningVisible;
@@ -487,16 +502,57 @@ public sealed partial class MainWindow : Window
     private void ApplyPalette()
     {
         var p = CurrentPalette();
-        // Apply window background
+
+        // U1: Replace the brush VALUES of the 14 DynamicResource keys so every
+        // ControlTheme consumer + static text with {DynamicResource ...} repaints
+        // automatically without any per-control code.
+        SetBrush("Bg",          p.Bg);
+        SetBrush("Card",        p.Card);
+        SetBrush("Card2",       p.Card2);
+        SetBrush("Border",      p.Border);
+        SetBrush("Text",        p.Text);
+        SetBrush("Sub",         p.Sub);
+        SetBrush("Accent",      p.Accent);
+        SetBrush("AccentHover", p.AccentHover);
+        SetBrush("OnAccent",    p.OnAccent);
+        SetBrush("Ghost",       p.Ghost);
+        SetBrush("GhostHover",  p.GhostHover);
+        SetBrush("On",          p.On);
+        SetBrush("OnText",      p.OnText);
+        SetBrush("Scroll",      p.Scroll);
+
+        // Apply window background (the root Border is not a DynamicResource consumer
+        // — it pre-dates this slice and we keep it imperative so the window bg is
+        // always correct even before the first Styles tick).
         if (Content is Border border)
         {
             border.Background = MacTheme.Brush(p.Bg);
             border.BorderBrush = MacTheme.Brush(p.Border);
-            border.BorderThickness = new Avalonia.Thickness(1);
+            border.BorderThickness = new Thickness(1);
         }
-        // Apply text foregrounds that are always visible
-        StatusText.Foreground = MacTheme.Brush(p.Text);
-        StatusSub.Foreground  = MacTheme.Brush(p.Sub);
+    }
+
+    /// <summary>
+    /// Mutate the Color of the named SolidColorBrush in the global resource chain
+    /// so DynamicResource consumers repaint automatically.
+    /// TryFindResource walks Styles.Resources (where the brushes are seeded) as well as
+    /// Application.Current.Resources, so we find the brush on the first call and mutate
+    /// it in place — no new brush objects, no re-registration needed.
+    /// </summary>
+    private static void SetBrush(string key, string hex)
+    {
+        if (Application.Current?.TryFindResource(key, out var existing) == true
+            && existing is SolidColorBrush brush)
+        {
+            brush.Color = MacTheme.ParseColor(hex);
+        }
+        else
+        {
+            // Fallback: add directly to Application.Current.Resources so the key
+            // is found on subsequent calls.
+            if (Application.Current != null)
+                Application.Current.Resources[key] = new SolidColorBrush(MacTheme.ParseColor(hex));
+        }
     }
 
     // ── Public API for App.axaml.cs (tray actions) ───────────────────────────
@@ -522,8 +578,41 @@ public sealed partial class MainWindow : Window
         Console.WriteLine($"[uitest] Theme: {_vm.Theme}");
         Console.WriteLine($"[uitest] Config path: {MacAppState.ConfigFile}");
 
+        // U1 uitest: verify palette brush keys are present in Application resources
+        // and BtnToggle carries the expected ControlTheme key.
+        RunU1UiTests();
+
         // B3c/B3.4 uitest: exercise tray actions, alert, and live theme switching.
         RunB3UiTests();
+    }
+
+    private void RunU1UiTests()
+    {
+        // U1: verify 14 palette brush keys are findable (Styles.Resources walks via TryFindResource).
+        // After ApplyPalette() they are mutated in place, so they reflect the active theme.
+        var brushKeys = new[] { "Bg", "Card", "Card2", "Border", "Text", "Sub",
+                                "Accent", "AccentHover", "OnAccent", "Ghost",
+                                "GhostHover", "On", "OnText", "Scroll" };
+        int missing = 0;
+        foreach (var key in brushKeys)
+        {
+            bool found = Application.Current?.TryFindResource(key, out var v) == true
+                         && v is SolidColorBrush;
+            if (!found) { Console.WriteLine($"[uitest] U1 MISSING brush key: {key}"); missing++; }
+        }
+        Console.WriteLine($"[uitest] U1 Palette brushes: {brushKeys.Length - missing}/{brushKeys.Length} present");
+
+        // U1: BtnToggle.Theme should be set (non-null) — AccentPill when monitoring is on.
+        bool toggleOk = BtnToggle.Theme != null;
+        Console.WriteLine($"[uitest] U1 BtnToggle.Theme set: {toggleOk}");
+
+        // U1.1: SpaceGrotesk FontFamily resource present.
+        bool fontOk = Application.Current?.TryFindResource("SpaceGrotesk", out var fontVal) == true
+                      && fontVal is FontFamily;
+        Console.WriteLine($"[uitest] U1.1 SpaceGrotesk font resource: {fontOk}");
+
+        bool u1Pass = missing == 0 && toggleOk && fontOk;
+        Console.WriteLine($"[uitest] U1 PASS: {u1Pass}");
     }
 
     private void RunB3UiTests()

@@ -1,0 +1,352 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!--
+    PatchCord.Mac — styling system (U1 + U1.1)
+    ─────────────────────────────────────────────────────────────────────────────
+    All palette brushes and keyed ControlThemes live in Styles.Resources so they
+    are accessible as StaticResource/DynamicResource throughout the application.
+
+    ApplyPalette() in MainWindow.axaml.cs mutates the brush Color values on theme
+    switch — every DynamicResource consumer repaints automatically.
+
+    ControlTheme keys (applied via Theme="{StaticResource ...}" on Button):
+      AccentPill   H42 r6 pad20,0 — BtnToggle when monitoring ON (blue)
+      OnPill       H42 r6 pad20,0 — BtnToggle when monitoring OFF (green)
+      GhostPill    H38 r8 1px border pad16,0 — Refresh, Get Mod
+      ModButton    MinW118 H30 r5 — per-install mod picker
+      TabButton    transparent SemiBold13, Classes="active" = Text + underline
+      SmallToggle  W62 H30 r5 — On/Off toggles (bg/fg set imperatively)
+      CheckButton  H30 r5 GhostHover bg — width set at call site
+  -->
+
+  <Styles.Resources>
+
+    <!-- ── 14 palette brush keys (seeded to Discord values) ──────────────── -->
+
+    <SolidColorBrush x:Key="Bg"          Color="#1E1F22"/>
+    <SolidColorBrush x:Key="Card"        Color="#2B2D31"/>
+    <SolidColorBrush x:Key="Card2"       Color="#313338"/>
+    <SolidColorBrush x:Key="Border"      Color="#3A3C42"/>
+    <SolidColorBrush x:Key="Text"        Color="#F2F3F5"/>
+    <SolidColorBrush x:Key="Sub"         Color="#B5BAC1"/>
+    <SolidColorBrush x:Key="Accent"      Color="#5865F2"/>
+    <SolidColorBrush x:Key="AccentHover" Color="#4752C4"/>
+    <SolidColorBrush x:Key="OnAccent"    Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="Ghost"       Color="#383A40"/>
+    <SolidColorBrush x:Key="GhostHover"  Color="#41434A"/>
+    <SolidColorBrush x:Key="On"          Color="#23A55A"/>
+    <SolidColorBrush x:Key="OnText"      Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="Scroll"      Color="#4E5058"/>
+
+    <!-- U1.1: Space Grotesk font family (avares:// resolves to Assets/) -->
+    <FontFamily x:Key="SpaceGrotesk">avares://PatchCord.Mac/Assets#Space Grotesk</FontFamily>
+
+    <!-- ── AccentPill ──────────────────────────────────────────────────────
+         BtnToggle when monitoring ON (blue "Turn Off").
+         H42, r6, pad 20,0. -->
+    <ControlTheme x:Key="AccentPill" TargetType="Button">
+      <Setter Property="Height"            Value="42"/>
+      <Setter Property="CornerRadius"      Value="6"/>
+      <Setter Property="Padding"           Value="20,0"/>
+      <Setter Property="FontSize"          Value="13"/>
+      <Setter Property="FontWeight"        Value="SemiBold"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment"   Value="Center"/>
+      <Setter Property="Background"        Value="{DynamicResource Accent}"/>
+      <Setter Property="Foreground"        Value="{DynamicResource OnAccent}"/>
+      <Setter Property="BorderThickness"   Value="0"/>
+      <Setter Property="Cursor"            Value="Hand"/>
+      <Setter Property="Template">
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Root"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="{TemplateBinding CornerRadius}"
+                  Padding="{TemplateBinding Padding}">
+            <ContentPresenter HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                              Content="{TemplateBinding Content}"
+                              ContentTemplate="{TemplateBinding ContentTemplate}"/>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^:pointerover /template/ Border#Root">
+        <Setter Property="Background" Value="{DynamicResource AccentHover}"/>
+      </Style>
+      <Style Selector="^:pressed /template/ Border#Root">
+        <Setter Property="Background" Value="{DynamicResource AccentHover}"/>
+        <Setter Property="Opacity"    Value="0.85"/>
+      </Style>
+    </ControlTheme>
+
+    <!-- ── OnPill ─────────────────────────────────────────────────────────
+         BtnToggle when monitoring OFF (green "Turn On").
+         Same geometry as AccentPill; On bg, OnText fg. -->
+    <ControlTheme x:Key="OnPill" TargetType="Button">
+      <Setter Property="Height"            Value="42"/>
+      <Setter Property="CornerRadius"      Value="6"/>
+      <Setter Property="Padding"           Value="20,0"/>
+      <Setter Property="FontSize"          Value="13"/>
+      <Setter Property="FontWeight"        Value="SemiBold"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment"   Value="Center"/>
+      <Setter Property="Background"        Value="{DynamicResource On}"/>
+      <Setter Property="Foreground"        Value="{DynamicResource OnText}"/>
+      <Setter Property="BorderThickness"   Value="0"/>
+      <Setter Property="Cursor"            Value="Hand"/>
+      <Setter Property="Template">
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Root"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="{TemplateBinding CornerRadius}"
+                  Padding="{TemplateBinding Padding}">
+            <ContentPresenter HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                              Content="{TemplateBinding Content}"
+                              ContentTemplate="{TemplateBinding ContentTemplate}"/>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^:pointerover /template/ Border#Root">
+        <Setter Property="Opacity" Value="0.88"/>
+      </Style>
+      <Style Selector="^:pressed /template/ Border#Root">
+        <Setter Property="Opacity" Value="0.75"/>
+      </Style>
+    </ControlTheme>
+
+    <!-- ── GhostPill ──────────────────────────────────────────────────────
+         Refresh / Get Mod. H38, r8, 1px border, pad 16,0. -->
+    <ControlTheme x:Key="GhostPill" TargetType="Button">
+      <Setter Property="Height"            Value="38"/>
+      <Setter Property="CornerRadius"      Value="8"/>
+      <Setter Property="Padding"           Value="16,0"/>
+      <Setter Property="FontSize"          Value="12"/>
+      <Setter Property="FontWeight"        Value="SemiBold"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment"   Value="Center"/>
+      <Setter Property="Background"        Value="{DynamicResource Ghost}"/>
+      <Setter Property="Foreground"        Value="{DynamicResource Text}"/>
+      <Setter Property="BorderBrush"       Value="{DynamicResource Border}"/>
+      <Setter Property="BorderThickness"   Value="1"/>
+      <Setter Property="Cursor"            Value="Hand"/>
+      <Setter Property="Template">
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Root"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="{TemplateBinding CornerRadius}"
+                  Padding="{TemplateBinding Padding}">
+            <ContentPresenter HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                              Content="{TemplateBinding Content}"
+                              ContentTemplate="{TemplateBinding ContentTemplate}"/>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^:pointerover /template/ Border#Root">
+        <Setter Property="Background" Value="{DynamicResource GhostHover}"/>
+      </Style>
+      <Style Selector="^:pressed /template/ Border#Root">
+        <Setter Property="Background" Value="{DynamicResource GhostHover}"/>
+        <Setter Property="Opacity"    Value="0.85"/>
+      </Style>
+    </ControlTheme>
+
+    <!-- ── WarnPill ───────────────────────────────────────────────────────
+         Fixed-amber CTA for the mod-missing warning ("Get …" button). Amber
+         across all themes (semantic warning colour); amber hover, no grey flip. -->
+    <ControlTheme x:Key="WarnPill" TargetType="Button">
+      <Setter Property="Height"            Value="32"/>
+      <Setter Property="CornerRadius"      Value="8"/>
+      <Setter Property="Padding"           Value="14,0"/>
+      <Setter Property="FontSize"          Value="12"/>
+      <Setter Property="FontWeight"        Value="SemiBold"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment"   Value="Center"/>
+      <Setter Property="Background"        Value="#FAA61A"/>
+      <Setter Property="Foreground"        Value="#1A1206"/>
+      <Setter Property="BorderThickness"   Value="0"/>
+      <Setter Property="Cursor"            Value="Hand"/>
+      <Setter Property="Template">
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Root"
+                  Background="{TemplateBinding Background}"
+                  CornerRadius="{TemplateBinding CornerRadius}"
+                  Padding="{TemplateBinding Padding}">
+            <ContentPresenter HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                              Content="{TemplateBinding Content}"
+                              ContentTemplate="{TemplateBinding ContentTemplate}"/>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^:pointerover /template/ Border#Root">
+        <Setter Property="Background" Value="#E8990F"/>
+      </Style>
+      <Style Selector="^:pressed /template/ Border#Root">
+        <Setter Property="Background" Value="#D98C0A"/>
+        <Setter Property="Opacity"    Value="0.9"/>
+      </Style>
+    </ControlTheme>
+
+    <!-- ── ModButton ──────────────────────────────────────────────────────
+         Per-install mod picker. MinW118 H30 r5, GhostHover bg, Text fg. -->
+    <ControlTheme x:Key="ModButton" TargetType="Button">
+      <Setter Property="MinWidth"          Value="118"/>
+      <Setter Property="Height"            Value="30"/>
+      <Setter Property="CornerRadius"      Value="5"/>
+      <Setter Property="Padding"           Value="10,0"/>
+      <Setter Property="FontSize"          Value="11"/>
+      <Setter Property="FontWeight"        Value="SemiBold"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment"   Value="Center"/>
+      <Setter Property="Background"        Value="{DynamicResource GhostHover}"/>
+      <Setter Property="Foreground"        Value="{DynamicResource Text}"/>
+      <Setter Property="BorderThickness"   Value="0"/>
+      <Setter Property="Cursor"            Value="Hand"/>
+      <Setter Property="Template">
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Root"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="{TemplateBinding CornerRadius}"
+                  Padding="{TemplateBinding Padding}">
+            <ContentPresenter HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                              Content="{TemplateBinding Content}"
+                              ContentTemplate="{TemplateBinding ContentTemplate}"/>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^:pointerover /template/ Border#Root">
+        <Setter Property="Background" Value="{DynamicResource Ghost}"/>
+      </Style>
+      <Style Selector="^:pressed /template/ Border#Root">
+        <Setter Property="Background" Value="{DynamicResource Ghost}"/>
+        <Setter Property="Opacity"    Value="0.85"/>
+      </Style>
+    </ControlTheme>
+
+    <!-- ── TabButton ──────────────────────────────────────────────────────
+         Tab bar buttons. Transparent bg, SemiBold 13.
+         Classes="active" → Text fg + 2px Accent underline. -->
+    <ControlTheme x:Key="TabButton" TargetType="Button">
+      <Setter Property="Padding"           Value="2,6"/>
+      <Setter Property="FontSize"          Value="13"/>
+      <Setter Property="FontWeight"        Value="SemiBold"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment"   Value="Center"/>
+      <Setter Property="Background"        Value="Transparent"/>
+      <Setter Property="Foreground"        Value="{DynamicResource Sub}"/>
+      <Setter Property="BorderThickness"   Value="0"/>
+      <Setter Property="Cursor"            Value="Hand"/>
+      <Setter Property="Template">
+        <ControlTemplate TargetType="Button">
+          <StackPanel Orientation="Vertical" Spacing="3">
+            <ContentPresenter HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                              Content="{TemplateBinding Content}"
+                              ContentTemplate="{TemplateBinding ContentTemplate}"/>
+            <Border x:Name="Underline"
+                    Height="2" CornerRadius="1"
+                    Background="{DynamicResource Accent}"
+                    IsVisible="False"/>
+          </StackPanel>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^.active">
+        <Setter Property="Foreground" Value="{DynamicResource Text}"/>
+      </Style>
+      <Style Selector="^.active /template/ Border#Underline">
+        <Setter Property="IsVisible" Value="True"/>
+      </Style>
+      <Style Selector="^:pointerover">
+        <Setter Property="Foreground" Value="{DynamicResource Text}"/>
+      </Style>
+    </ControlTheme>
+
+    <!-- ── SmallToggle ────────────────────────────────────────────────────
+         Options On/Off toggles and row toggle.
+         W62 H30 r5. Background/Foreground driven imperatively for On/Off state;
+         this theme owns hover/press to block Fluent overrides. -->
+    <ControlTheme x:Key="SmallToggle" TargetType="Button">
+      <Setter Property="Width"             Value="62"/>
+      <Setter Property="Height"            Value="30"/>
+      <Setter Property="CornerRadius"      Value="5"/>
+      <Setter Property="FontSize"          Value="11"/>
+      <Setter Property="FontWeight"        Value="SemiBold"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment"   Value="Center"/>
+      <Setter Property="BorderThickness"   Value="0"/>
+      <Setter Property="Cursor"            Value="Hand"/>
+      <Setter Property="Template">
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Root"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="{TemplateBinding CornerRadius}"
+                  Padding="{TemplateBinding Padding}">
+            <ContentPresenter HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                              Content="{TemplateBinding Content}"
+                              ContentTemplate="{TemplateBinding ContentTemplate}"/>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^:pointerover /template/ Border#Root">
+        <Setter Property="Opacity" Value="0.88"/>
+      </Style>
+      <Style Selector="^:pressed /template/ Border#Root">
+        <Setter Property="Opacity" Value="0.75"/>
+      </Style>
+    </ControlTheme>
+
+    <!-- ── CheckButton ────────────────────────────────────────────────────
+         Utility buttons (Check, etc.). H30 r5, GhostHover bg; width at call site. -->
+    <ControlTheme x:Key="CheckButton" TargetType="Button">
+      <Setter Property="Height"            Value="30"/>
+      <Setter Property="CornerRadius"      Value="5"/>
+      <Setter Property="Padding"           Value="10,0"/>
+      <Setter Property="FontSize"          Value="11"/>
+      <Setter Property="FontWeight"        Value="SemiBold"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="VerticalContentAlignment"   Value="Center"/>
+      <Setter Property="Background"        Value="{DynamicResource GhostHover}"/>
+      <Setter Property="Foreground"        Value="{DynamicResource Text}"/>
+      <Setter Property="BorderThickness"   Value="0"/>
+      <Setter Property="Cursor"            Value="Hand"/>
+      <Setter Property="Template">
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Root"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="{TemplateBinding CornerRadius}"
+                  Padding="{TemplateBinding Padding}">
+            <ContentPresenter HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                              Content="{TemplateBinding Content}"
+                              ContentTemplate="{TemplateBinding ContentTemplate}"/>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^:pointerover /template/ Border#Root">
+        <Setter Property="Background" Value="{DynamicResource Ghost}"/>
+      </Style>
+      <Style Selector="^:pressed /template/ Border#Root">
+        <Setter Property="Background" Value="{DynamicResource Ghost}"/>
+        <Setter Property="Opacity"    Value="0.85"/>
+      </Style>
+    </ControlTheme>
+
+  </Styles.Resources>
+
+</Styles>

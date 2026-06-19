@@ -51,11 +51,19 @@ internal static class MacAppState
 
     /// <summary>
     /// Load (or reload) config from ConfigFile. Creates BaseDir if needed.
+    /// On first run (no config file yet) defaults the macOS theme to "Discord"
+    /// without touching Core's UiConfig.Theme default ("Dark") shared with Windows.
     /// </summary>
     public static AppConfig EnsureLoaded()
     {
         Directory.CreateDirectory(BaseDir);
+        bool isFirstRun = !File.Exists(ConfigFile);
         _cfg = AppConfig.Load(ConfigFile, () => Platform.DiscoverInstalls().ToList());
+        if (isFirstRun)
+        {
+            _cfg.Ui.Theme = "Discord";
+            _cfg.Save(ConfigFile);
+        }
         return _cfg;
     }
 
