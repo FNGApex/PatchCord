@@ -137,6 +137,35 @@ Goal: a double-clickable `.app`. (Design §13.)
 | B4.3 | Add `publish-mac.sh` (mac analog of `publish.ps1`); keep `publish.ps1` Windows-only/untouched | Inspect both scripts | `publish-mac.sh` builds the `.app`; `publish.ps1` unchanged |
 | B4.4 | README documents the macOS build/install + Gatekeeper first-run + the official-installer alternative | Read README | macOS section present; notes Avalonia as the first NuGet dep and that Windows publish is unaffected |
 
+### Phase B5 — Layer-B confirm + OpenAsar/monitor hardening (osx-arm64) — PLANNED
+Goal: live-confirm the three port surfaces reachable **without** the parked Layer-A App-Management/FDA
+grant (BetterDiscord injection, the FDA-free OpenAsar portion, the BD re-patch loop), and fix two probe
+defects found by primary-source review. **Layer-A live-confirm stays PARKED** (Vencord uses Rosetta, user
+choice). All work is Core-platform-neutral or Mac-shell-only; **Windows shell + `publish.ps1` stay green**;
+zero new NuGet in Core. New verification flags follow the existing headless `--mac-*` harness pattern in
+`src/PatchCord.Mac/Program.cs`. Design: §16 (with §8.5/§8.6/§15 context).
+
+> **Gate to surface in UI + docs:** OpenAsar's live install writes the **bundle** `Contents/Resources/app.asar`
+> (`OpenAsarEngine.UnderlyingAsar` → bundle, carries `com.apple.provenance`) — the SAME App-Management/FDA
+> gate as Layer A. So OpenAsar's real bundle install **and uninstall** are mechanism-verified-on-copy ONLY,
+> NOT live-confirmed (parked with Layer A). Only download, 12h cache TTL, and byte-scan detection are FDA-free.
+
+| # | Checkpoint | Files touched | Verification command | Status |
+|---|---|---|---|---|
+| B5.1 | App-support-root test seam: honor `PATCHCORD_APPSUPPORT_ROOT` env override in `MacDiscordPlatform` (`AppSupportRoot`/`AppSupportDirForBranch`) so harnesses can point Layer-B resolution at a `/tmp` fixture without mutating the real Discord tree (mirrors `VENCORD_USER_DATA_DIR`). Default unchanged = `~/Library/Application Support`. | `src/PatchCord.Mac/MacDiscordPlatform.cs` | `dotnet build PatchCord.sln -p:EnableWindowsTargeting=true` (3/3 green) + `dotnet build src/PatchCord.Core/PatchCord.Core.csproj` (flag-free) | PLANNED |
+| B5.2 | BD asar presence + Core inject/restore (Layer B, FDA-free): assert `BetterDiscordAsarPath` resolves to `~/Library/Application Support/BetterDiscord/data/betterdiscord.asar` (matches BD installer `install.js`); with the asar present, drive `BetterDiscordEngine.Inject(coreAppDir, asar)` on the real wrapped `app-0.0.395` core, read `index.js` back, assert it `== InjectContent` (contains `betterdiscord.asar`); then `Restore`, assert byte-exact vanilla `module.exports = require('./core.asar');\n` (41 bytes). | `src/PatchCord.Mac/Program.cs` (new `--mac-b5-bdtest`) | `dotnet run --project src/PatchCord.Mac -- --mac-b5-bdtest` → all PASS, exit 0 | PLANNED |
+| B5.3 | BD live load (the one unavoidable GUI step): place `betterdiscord.asar` (official installer or `curl https://betterdiscord.app/Download/betterdiscord.asar`), set an install's `ClientMod=betterdiscord`, let the monitor inject + restart via `open -a`, then **visually** confirm BetterDiscord loaded (settings has a BetterDiscord section/cog); toggle off, confirm it's gone after restart. | (none — runtime confirm) | Manual: launch `PatchCord.app`, observe BD in Discord settings; toggle off → BD section gone after restart | PLANNED |
+| B5.4 | OpenAsar FDA-free confirm (on `/tmp` copy): (a) download + 12h cache TTL — backdate cache mtime → re-download, freshen → cache hit; (b) positive detection — `Install` OpenAsar into a `/tmp` Resources copy, assert `IsInstalled==true`; (c) layering order — install OpenAsar then `PatchEngine.Patch` a stub on top then `Unpatch`, assert OpenAsar layer survives + still detected. No real bundle write. | `src/PatchCord.Mac/Program.cs` (new `--mac-b5-openasar`), may extend `OpenAsarEngine.TestFetchAndDetect` (`src/PatchCord.Core/OpenAsarEngine.cs`) | `dotnet run --project src/PatchCord.Mac -- --mac-b5-openasar` → all PASS, exit 0 | PLANNED |
+| B5.5 | Monitor BD re-inject after a new `app-<ver>` (re-patch loop, FDA-free via B5.1 seam): build a `/tmp` fixture app-support root (`app-0.0.395` + higher `app-0.0.999`, each vanilla wrapped `index.js`), `ClientMod=betterdiscord`, run `MonitorService.RunOnce`; assert `ResolveCoreAppDir` returns the higher dir and its `index.js` now contains `betterdiscord.asar`. | `src/PatchCord.Mac/Program.cs` (new `--mac-b5-repatch`) | `dotnet run --project src/PatchCord.Mac -- --mac-b5-repatch` → PASS, exit 0 | PLANNED |
+| B5.6 | Version-ordering unit (no Discord): over a `/tmp` fixture with `app-0.0.9`, `app-0.0.10`, `app-weird`, assert `GetLatestCoreAppDir` picks `0.0.10` (numeric, not lexical) and ignores the non-`X.Y.Z` name. | `src/PatchCord.Mac/Program.cs` (fold into `--mac-b5-repatch` or `--mac-selftest`) | `dotnet run --project src/PatchCord.Mac -- --mac-b5-repatch` → version-order checkpoint PASS | PLANNED |
+| B5.7 | ShipIt guard fix (live correctness bug): `IsUpdateInProgress` must NOT fire for a foreign Squirrel `ShipIt` (verified live: VS Code's `com.microsoft.VSCode.ShipIt` triggers a false positive). Make the process check **Discord-identity-scoped** (match `Process.MainModule.FileName`/argv against the Discord bundle/app-support path or `com.hnc.Discord`; `ps`/`pgrep` fallback if MainModule unreadable); keep the Discord-specific `ShipIt_request.json` 90 s recency window as a named constant backstop. | `src/PatchCord.Mac/MacDiscordPlatform.cs` | `dotnet run --project src/PatchCord.Mac -- --mac-b5-shipit` → probe false for a stubbed foreign ShipIt; false for stale request file; true for freshly-touched one | PLANNED |
+| B5.8 | Restart targeting fix: `Start` uses `open -a "<bundle name>"` which LaunchServices resolves by name — risky when an update has staged a second `Discord.app` at `app-<ver>/Discord.app/` (confirmed in `ShipIt_request.json` `updateBundleURL`). Change to `open -a "<inst.Path full bundle path>"` or `open -b com.hnc.Discord` so the `/Applications` copy is relaunched. | `src/PatchCord.Mac/MacDiscordPlatform.cs` | `dotnet run --project src/PatchCord.Mac -- --mac-selftest` (B2.5 Start still launches + IsRunning=true) | PLANNED |
+| B5.9 | Windows-green + sln regression check: confirm Core builds flag-free, all 3 projects build, the Windows shell is untouched by B5 (only Core seams + Mac shell changed), `publish.ps1` unchanged. | (verify only) | `dotnet build PatchCord.sln -p:EnableWindowsTargeting=true` (3/3, 0 err) + `dotnet build src/PatchCord.Core/PatchCord.Core.csproj` (flag-free, 0 err) + inspect `publish.ps1` (RID `win-x64`, untouched) | PLANNED |
+
+B5 out of scope (stays parked): Layer-A (Vencord/Equicord) real-bundle patch + real-mod load, OpenAsar real
+bundle install/uninstall + boot, real-bundle Layer-A re-patch after a live update — all gated on the
+one-time App-Management/FDA grant to the packaged signed `PatchCord.app` (B3.9 / B4.2 / design §15).
+
 ### Path B Out of scope
 - iOS/Android/Linux (Avalonia could later, not now).
 - osx-x64 / Intel Macs (locked to osx-arm64 only).
@@ -146,6 +175,20 @@ Goal: a double-clickable `.app`. (Design §13.)
 ---
 
 ## Change log
+
+- 2026-06-18 — **B5 PLANNED (Layer-B confirm + OpenAsar/monitor hardening).** Added Phase B5 (B5.1–B5.9):
+  BD Layer-B live confirm (FDA-free; one manual GUI "BD loaded" step), the FDA-free OpenAsar portion
+  (download + 12h cache + positive byte-scan + on-copy layering), and the BD re-patch loop confirm. Two
+  defects found via primary-source review and folded in as fixes: (1) `IsUpdateInProgress` matches ANY
+  app's Squirrel `ShipIt` — verified live false-positive from VS Code's `com.microsoft.VSCode.ShipIt`;
+  fix = Discord-identity-scoped process check + keep the Discord-specific `ShipIt_request.json` 90 s
+  recency backstop (B5.7); (2) `Start`'s `open -a "<name>"` can relaunch a staged update bundle, fix to a
+  full-path/`-b com.hnc.Discord` relaunch (B5.8). New: a `PATCHCORD_APPSUPPORT_ROOT` test seam (B5.1)
+  so BD re-inject-after-update is headlessly testable without mutating the real Discord tree.
+  **CONFIRMED gate:** OpenAsar's live install (and uninstall) writes the bundle `app.asar`
+  (`com.apple.provenance` verified) — same App-Management/FDA gate as Layer A → mechanism-on-copy only,
+  parked. Layer-A live-confirm stays parked (Vencord uses Rosetta, user choice). Design §16. Status: all
+  B5 rows PLANNED; nothing built yet (planning only).
 - 2026-06-18 — **Path B IMPLEMENTED (B1–B4), branch feat/macos-port, 12 commits.** B1 core split +
   IDiscordPlatform (9fb47ab); B2 MacDiscordPlatform (1a59d4d); B3a Avalonia bootstrap (f1a011e); probe
   opt-in (7bd5f2f); B3b MainWindow/InstallRow (811cf82); B3c tray/alert/themes (4ab2c29); B3d shared

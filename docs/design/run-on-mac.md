@@ -478,3 +478,180 @@ run launched from VS Code was attributed to "Visual Studio Code"). Implications:
 - ACTION: the `--mac-selftest` B2.8 real-bundle WRITE probe must be made OPT-IN (gated behind an explicit
   flag, default OFF) so routine self-tests do not repeatedly raise the system prompt. The byte-identical
   swap on a /tmp copy stays the default, non-prompting verification.
+
+## 16. B5 delta — Layer-B live confirm + OpenAsar/monitor hardening (2026-06-18, re-plan pass 2)
+
+This phase confirms the three port surfaces that are reachable **without** the parked Layer-A
+App-Management/FDA grant, and hardens two probes that primary-source review found to be wrong or fragile.
+Layer-A live-confirm (Vencord/Equicord real-bundle patch + real-mod load) stays PARKED by user choice
+(Vencord uses Rosetta) — it is the only thing gated behind the deferred grant. Evidence below is verified
+against primary sources (BetterDiscord Installer `paths.js`/`install.js`, the live install, the live
+`ShipIt_request.json`) and the existing Core/Mac source.
+
+### 16.1 BetterDiscord (Layer B) — getting the asar + the live-confirm procedure
+
+**(a) Where `betterdiscord.asar` comes from.** Verified against `BetterDiscord/Installer`
+`src/renderer/actions/install.js`:
+- The installer writes the asar to `path.join(getPath("appData"), "BetterDiscord", "data", "betterdiscord.asar")`.
+  On macOS Electron, `getPath("appData")` = `~/Library/Application Support`, so the destination is
+  `~/Library/Application Support/BetterDiscord/data/betterdiscord.asar` — **exactly** the path
+  `MacDiscordPlatform.BetterDiscordAsarPath` already returns. No path change needed.
+- Download source (primary): `https://betterdiscord.app/Download/betterdiscord.asar` (302 → GitHub),
+  with a GitHub Releases API fallback (asset named `betterdiscord.asar`).
+- For the dev confirm we do **not** need BD's installer to *inject* — only to *place the asar*. Two equally
+  valid ways to satisfy the path: (i) run the official BD installer (it creates the `data/` dir + downloads
+  the asar), or (ii) scripted placement — `mkdir -p ~/Library/Application\ Support/BetterDiscord/data` and
+  `curl -L https://betterdiscord.app/Download/betterdiscord.asar -o .../betterdiscord.asar`. PatchCord only
+  reads this file and writes the require-line itself.
+
+**(b) Does BD's macOS injector write the SAME require line PatchCord produces?** Verified against
+`install.js` `injectShims`: BD writes
+`require("<asarPath, backslash+quote escaped>");\nmodule.exports = require("./core.asar");`. PatchCord's
+`BetterDiscordEngine.InjectContent` JSON-serializes the asar path (UnsafeRelaxedJsonEscaping) into
+`require(<json>);\nmodule.exports = require("./core.asar");`. For a normal macOS path these are
+**byte-equivalent** (double-quoted, same shim shape); `Restore`'s vanilla string
+`module.exports = require('./core.asar');\n` matches what Discord ships (confirmed on the live install:
+the wrapped `index.js` is exactly that, 41 bytes). **Conclusion: use PatchCord's own injection for the
+confirm; BD's installer is needed only for the asar bytes.**
+
+**(c) CORE-PATH DISCREPANCY (important).** BD's own macOS path resolver (`paths.js` `getDiscordPath`,
+non-win32 branch) targets `…/<version>/modules/discord_desktop_core` — the **legacy unwrapped** layout.
+The live Mac install has **only** the **wrapped** layout
+`…/app-0.0.395/modules/discord_desktop_core-1/discord_desktop_core/index.js` (no unwrapped dir exists).
+PatchCord's `BetterDiscordEngine.FindCoreIndexJs` tries **wrapped-first (`discord_desktop_core-*`,
+highest N) then legacy**, so it resolves the real file where BD's own current macOS injector would miss it.
+This is a point *in PatchCord's favor* — but it means a side-by-side "did BD's installer inject the same
+place" check is moot on this layout; the authoritative target is the wrapped `index.js`, and PatchCord
+hits it. (BD-loaded-correctly is still confirmable: after PatchCord injects, restart Discord and verify
+the BetterDiscord settings cog appears in-app — a manual visual step, see §16.4.)
+
+**(d) Live-confirm sequence (Layer B is OUTSIDE the bundle → no App-Management/FDA needed):**
+1. Ensure `~/Library/Application Support/BetterDiscord/data/betterdiscord.asar` exists (official installer
+   or scripted placement, per (a)).
+2. Drive Core: `BetterDiscordEngine.Inject(coreAppDir, BetterDiscordAsarPath)` where
+   `coreAppDir = MacDiscordPlatform.ResolveCoreAppDir(discord)` (the wrapped `app-0.0.395`).
+3. Restart Discord via the platform `Start` (`open -a`), then **manually** confirm BD loaded (settings has
+   a "BetterDiscord" section / the cog). This visual step is the one unavoidable manual action.
+4. Toggle off: `BetterDiscordEngine.Restore(coreAppDir)` → assert the file is byte-exactly the vanilla
+   string `module.exports = require('./core.asar');\n` (41 bytes). This assertion is fully headless.
+
+### 16.2 OpenAsar — the FDA gate, and what IS confirmable now
+
+**CONFIRMED finding (verify-and-build-around):** `OpenAsarEngine.Install` writes `UnderlyingAsar()`, which
+resolves to `Path.Combine(resourcesDir, "_app.asar"|"app.asar")`. On macOS `resourcesDir` =
+`MacDiscordPlatform.ResolveResourcesDir` = `<bundle>/Contents/Resources` — i.e. the **bundle**. The live
+`/Applications/Discord.app/Contents/Resources/app.asar` carries the `com.apple.provenance` xattr (verified
+this session), so writing it is gated by the **same App-Management/FDA TCC** as the Layer-A swap (§15).
+**Therefore the live OpenAsar install shares the deferred grant and is NOT live-confirmable now** — it is
+mechanism-verified-on-copy only, exactly the same status as Layer A.
+
+**FDA-free (confirmable NOW):**
+- **Download** of the GitHub nightly asar (`OpenAsarEngine` `DownloadUrl`) — pure `HttpClient`.
+- **12-hour cache TTL** at `<baseDir>/openasar.asar` (Mac `baseDir` = `~/Library/Application Support/PatchCord`).
+  Both branches are confirmable on a temp cache dir: backdate the cache mtime → assert re-download;
+  freshen it → assert cache hit (no network). The TTL logic is load-bearing and worth a headless check.
+- **POSITIVE byte-scan detection** (`IsInstalled` → `ContainsMarker("OpenAsar")`) — not just the vanilla
+  negative: actually `Install` OpenAsar into a **`/tmp` copy** of the bundle Resources dir, then assert
+  detection returns `true`. This proves the detector against a genuinely-OpenAsar'd asar.
+- **On-copy layering order** (the highest-value FDA-free confirm): on a `/tmp` copy, install OpenAsar
+  (underlying), then `PatchEngine.Patch` a Layer-A stub on top, then `Unpatch`, and assert the OpenAsar
+  layer survives + detection still fires — proving the cross-cutting "OpenAsar sits below both mod layers"
+  invariant without touching the real bundle.
+- The existing `OpenAsarEngine.TestFetchAndDetect(resourcesDir, cacheDir)` already exercises download +
+  write-to-a-(temp)-dir + detect; pointed at a `/tmp` dir it is a partial FDA-free confirm — extend it
+  (or a new `--mac-b5-openasar` flag) to cover cache TTL + positive detection + layering order.
+
+**NOT live-confirmed (parked with Layer A):** the real bundle replace (`Install` writing the bundle
+`app.asar`) **and the backup-restore / uninstall path** (which moves the bundle backup back into place —
+equally bundle-gated, not just install) + Discord actually booting OpenAsar. Mechanism is the same
+`File.Move`/`File.WriteAllBytes` proven byte-identical on a `/tmp` copy. Surface this gate prominently
+(done in §15 + spec B5 status notes).
+
+### 16.3 Monitor / re-patch loop + the ShipIt guard fix
+
+**Loop already correct & wired.** `MonitorService.RunOnce` (Core) reconciles desired-vs-actual every tick:
+it computes `InstallState` per install, diffs against each install's `ClientMod` (Layer A vs Layer B vs
+OpenAsar), and re-applies + restarts on drift. The Mac shell drives it on an Avalonia `DispatcherTimer`
+(`MainWindow.axaml.cs` `SetMonitorTimer`, interval `max(5, IntervalSeconds)`, passing the FDA
+`onPatchError` handler). After a Discord auto-update a new `app-<ver>` appears in App-Support (Layer B) and
+the bundle `app.asar` reverts (Layer A); `GetInstallState` observes "mod missing," and the loop re-applies.
+**B5's job is to LIVE-CONFIRM this for Layer B (reachable) — not rebuild it.** Layer-A re-patch confirm
+needs FDA (parked).
+
+**BD re-inject after a new core dir (the live-confirmable half of item #4) — needs a test-root seam.**
+`ResolveCoreAppDir`/`AppVersionLabel` pick the **highest** `app-*` with a `modules/` subdir (verified
+`GetLatestCoreAppDir`). To simulate an update we create a synthetic higher `app-<newver>` core tree (with a
+vanilla `index.js`) and assert the resolver moves to it and the loop re-injects BD there. **Problem:**
+`MacDiscordPlatform.AppSupportRoot`/`AppSupportDirForBranch` are hardcoded to the real
+`~/Library/Application Support` with no override, so a headless test would have to mutate the **real**
+Discord tree — risky and not cleanly isolatable. **Decision: add a test-only app-support-root override
+seam**, mirroring the existing `VENCORD_USER_DATA_DIR`/`EQUICORD_USER_DATA_DIR` pattern — e.g. honor a
+`PATCHCORD_APPSUPPORT_ROOT` env var so the harness points the platform at a `/tmp` fixture root. With
+the seam, B5 builds a `/tmp` fixture (`app-0.0.395` then a higher `app-0.0.999`, each with
+`modules/discord_desktop_core-1/discord_desktop_core/index.js` = vanilla), runs `RunOnce`, and asserts:
+(i) `ResolveCoreAppDir` returns the higher dir; (ii) its `index.js` now contains `betterdiscord.asar`.
+Fully headless, FDA-free, no real-tree mutation. Cleanup deletes the fixture.
+
+**Version-ordering edge (headless unit, no Discord needed).** `GetLatestCoreAppDir` orders by
+`Version.TryParse(Name[4..])`, silently falling back to `0.0.0` for a non-`X.Y.Z` dir name. Add a small
+checkpoint over a `/tmp` fixture with mixed names (`app-0.0.9`, `app-0.0.10`, `app-weird`) asserting the
+numerically-highest valid version wins (`0.0.10 > 0.0.9`, `app-weird` ignored). Cheap insurance against a
+sort regression after an update.
+
+**ShipIt guard — TWO defects found, must fix in B5:**
+1. **Over-broad process match (BUG).** `IsUpdateInProgress` calls `Process.GetProcessesByName("ShipIt")`,
+   which matches **any** app's Squirrel.Mac updater. Verified live: VS Code's
+   `com.microsoft.VSCode.ShipIt` was running, so the probe returns `true` and PatchCord would defer Discord
+   patching whenever *any* Squirrel app updates. Fix: do not treat a bare `ShipIt` process as Discord's.
+   The ShipIt invocation carries the app's `…ShipIt` label/cache path argument containing the bundle id
+   (Discord's is `com.hnc.Discord` / the request names `com.discord.discord`); filter by that, or drop the
+   process check entirely and rely on (2).
+2. **`ShipIt_request.json` is Discord-specific and persists stale (verified).** It lives at
+   `~/Library/Application Support/<branch>/ShipIt_request.json` — Discord-private, so it is the *right*
+   signal. Its content (verified live) is the Squirrel hand-off:
+   `{"updateBundleURL":"file://…/app-<NEWVER>/Discord.app/","targetBundleURL":"file:///Applications/Discord.app/", "bundleIdentifier":"com.discord.discord", …}` — confirming the update **stages a new
+   `app-<ver>` bundle and copies it over `/Applications/Discord.app`** (this also re-confirms the Layer-A
+   bundle is what an update overwrites → FDA gate). The file is **not deleted** after an update (the live
+   one is ~1 day old), so a plain "exists" check is wrong; the existing **90 s recency window on mtime is
+   the correct shape** and the stale file correctly reads `false`. 90 s is a reasonable upper bound for a
+   ShipIt copy of a ~200 MB bundle; keep it but make it a named constant. Next-tick convergence + the
+   idempotent patch + `_patchFailed` back-off remain the backstop, so a missed-narrow-window race only
+   defers one tick.
+   **Decision:** keep the recency-window check as the head-start backstop; make the process check the
+   **primary, Discord-scoped** signal (true for the whole update duration), filtered by Discord identity —
+   not a bare `ShipIt` name match. The probe must no longer fire for foreign Squirrel apps, and 90 s is
+   then not load-bearing (becomes a named constant covering only the pre-spawn window).
+
+   **Identity-filter implementation + caveat.** Discord's ShipIt carries a Discord-specific discriminator
+   in its path/argv (cache path `…/com.hnc.Discord.ShipIt/…`; the request file names `com.discord.discord`).
+   Prefer matching `Process.MainModule.FileName`/argv against the branch's Discord app-support/bundle path.
+   **Caveat (unverified):** `Process.MainModule.FileName` can be null/unreadable for foreign-context
+   processes from .NET on macOS; if so fall back to a `ps -o command= -p <pid>` (or `pgrep -lf ShipIt`)
+   scrape. The B5 ShipIt checkpoint must (i) spawn/stub a **foreign** `ShipIt`-named process and assert the
+   probe returns **false** (direct regression guard for the live VS Code false-positive), and (ii) assert a
+   stale `ShipIt_request.json` reads false while a freshly-touched one reads true.
+
+**Restart correctness (`open -a`).** `Start` runs `open -a "<bundle name>"`, which LaunchServices resolves
+**by name** — risky when an update has staged a second `Discord.app` at `app-<ver>/Discord.app/`
+(the `updateBundleURL` above). Harden to `open -a "<full bundle path>"` (the install's `inst.Path`) or
+`open -b com.hnc.Discord` so the *installed* `/Applications` copy is relaunched, not a staged one. Verify
+the relaunched process belongs to the right branch.
+
+### 16.4 What is headless-confirmable vs unavoidably manual (B5)
+
+| Surface | Headless via `--mac-*` harness? | Manual step? |
+|---|---|---|
+| BD asar present at the expected path | Yes (file existence check) | One-time: place the asar (installer or `curl`) |
+| BD inject via Core → wrapped `index.js` contains `betterdiscord.asar` | Yes | — |
+| **BD actually loaded in Discord** (settings cog) | **No** | **Yes — visual confirm after restart** |
+| BD restore → byte-exact vanilla string | Yes | — |
+| OpenAsar download + 12h cache + byte-scan detect (on `/tmp`) | Yes (extend `TestFetchAndDetect`) | — |
+| OpenAsar real bundle install + boot | No (FDA-gated, parked) | Parked with Layer A |
+| Monitor BD re-inject after a synthetic higher `app-<ver>` | Yes (copy core tree, tick, assert) | — |
+| ShipIt guard: foreign-Squirrel false-positive fixed; Discord-scoped; 90 s window | Yes (spawn/stub a foreign ShipIt name; stale vs fresh request file) | — |
+| Restart via `open -a <full path>`/`-b` relaunches `/Applications` copy | Partly (assert command form; live relaunch is observable) | — |
+
+The single unavoidable manual action is the **visual "BetterDiscord loaded" confirm** after a real
+restart; everything else extends the existing headless self-test pattern (`Program.cs` `--mac-selftest`
+family). New B5 harness flags follow that pattern (e.g. `--mac-b5-bdtest`, `--mac-b5-openasar`,
+`--mac-b5-repatch`, `--mac-b5-shipit`).
