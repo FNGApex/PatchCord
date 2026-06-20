@@ -111,7 +111,7 @@ internal sealed class MainViewModel : INotifyPropertyChanged
         get
         {
             return _cfg.Installs.Any(i =>
-                i.Enabled && i.ClientMod != "none" && !MacAppState.ModInstalled(i.ClientMod));
+                i.Enabled && (i.ClientMod is "vencord" or "equicord") && !MacAppState.ModInstalled(i.ClientMod));
         }
     }
 
@@ -120,7 +120,7 @@ internal sealed class MainViewModel : INotifyPropertyChanged
         get
         {
             var missing = _cfg.Installs
-                .Where(i => i.Enabled && i.ClientMod != "none" && !MacAppState.ModInstalled(i.ClientMod))
+                .Where(i => i.Enabled && (i.ClientMod is "vencord" or "equicord") && !MacAppState.ModInstalled(i.ClientMod))
                 .Select(i => i.ClientMod).Distinct().ToList();
             if (missing.Count == 0) return "";
             var label = missing[0] switch
@@ -144,7 +144,7 @@ internal sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>The first enabled install's mod that isn't installed on disk, or null.</summary>
     private string? FirstMissingMod() =>
         _cfg.Installs
-            .Where(i => i.Enabled && i.ClientMod != "none" && !MacAppState.ModInstalled(i.ClientMod))
+            .Where(i => i.Enabled && (i.ClientMod is "vencord" or "equicord") && !MacAppState.ModInstalled(i.ClientMod))
             .Select(i => i.ClientMod)
             .FirstOrDefault();
 
@@ -171,6 +171,21 @@ internal sealed class MainViewModel : INotifyPropertyChanged
         "betterdiscord" => "https://betterdiscord.app/",
         _               => "https://vencord.dev/download/",
     };
+
+    // ── BetterDiscord "Fix it" (self-heal) ────────────────────────────────────
+
+    /// <summary>The first enabled install whose BetterDiscord is malformed by the installer, or null.</summary>
+    public Install? FirstBdFixInstall() =>
+        _cfg.Installs.FirstOrDefault(i => i.Enabled && MacAppState.IsBdMalformed(i));
+
+    /// <summary>True when a BetterDiscord install needs the one-click repair.</summary>
+    public bool BdFixVisible => FirstBdFixInstall() != null;
+
+    /// <summary>Explanatory copy for the Fix-it banner.</summary>
+    public string BdFixText =>
+        "BetterDiscord looks broken — its installer patched the wrong folder for this Discord build, " +
+        "so it isn't actually loaded. Click \"Fix it\" and PatchCord will inject the correct folder " +
+        "(downloading BetterDiscord if needed) and keep it patched after every Discord update.";
 
     // ── Options tab — Client mod ──────────────────────────────────────────────
 

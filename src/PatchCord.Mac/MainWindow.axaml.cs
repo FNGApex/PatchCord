@@ -27,6 +27,9 @@ public sealed partial class MainWindow : Window
     // B3.9: FDA onboarding handler — set in Initialize(), passed to RunOnce().
     private Action<Install, Exception>? _fdaErrorHandler;
 
+    // F5: guards the BetterDiscord "Fix it" self-heal against double-clicks / re-entrancy.
+    private bool _bdFixInProgress;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -111,6 +114,52 @@ public sealed partial class MainWindow : Window
                     "open", $"\"{_vm.ModMissingGetUrl}\"") { UseShellExecute = false });
             }
             catch (Exception ex) { Log.Write($"Open mod URL failed: {ex.Message}", "WARN"); }
+        };
+
+        // F5: BetterDiscord "Fix it" — repair a malformed BD install, then keep patching.
+        BtnFixBd.Click += (_, _) =>
+        {
+            if (_vm == null || _bdFixInProgress) return;
+            var target = _vm.FirstBdFixInstall();
+            if (target == null) return;
+
+            _bdFixInProgress = true;
+            BdFixWarn.IsVisible = false; // hide immediately; FixBetterDiscord stops/starts Discord
+            var cfg = MacAppState.Config;
+            MacAlert.Show(cfg, $"Repairing BetterDiscord for {target.Name}…", force: true);
+
+            // The repair downloads (maybe) and stops/starts Discord — do it off the UI thread.
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                Exception? error = null;
+                try { MacAppState.FixBetterDiscord(target); }
+                catch (Exception ex) { error = ex; Log.Write($"Fix BetterDiscord failed: {ex}", "ERROR"); }
+
+                Dispatcher.UIThread.Post(() =>
+                {
+                    _bdFixInProgress = false;
+                    if (error != null)
+                    {
+                        MacAlert.Show(cfg, $"Couldn't fix BetterDiscord: {error.Message}", force: true);
+                    }
+                    else
+                    {
+                        // Keep patching: ensure monitoring is on so the fix persists across updates.
+                        if (_vm != null && !_vm.MonitoringEnabled)
+                        {
+                            _vm.MonitoringEnabled = true;
+                            _monitor?.Reset();
+                            SetMonitorTimer(true);
+                        }
+                        MacAppState.Save();
+                        MacAlert.Show(cfg,
+                            $"BetterDiscord fixed for {target.Name}. PatchCord will keep it patched.",
+                            force: true);
+                    }
+                    UpdateStatusUi();
+                    BuildInstallRows();
+                });
+            });
         };
 
         // Options — OpenAsar toggle
@@ -315,6 +364,11 @@ public sealed partial class MainWindow : Window
             ModWarnText.Text = _vm.ModMissingWarningText;
             BtnGetMod.Content = _vm.ModMissingGetLabel; // B2: reflect the actual missing mod
         }
+
+        // BetterDiscord malformed → "Fix it" self-heal banner (F5).
+        BdFixWarn.IsVisible = _vm.BdFixVisible && !_bdFixInProgress;
+        if (BdFixWarn.IsVisible)
+            BdFixText.Text = _vm.BdFixText;
 
         // History
         BuildHistory();

@@ -104,4 +104,53 @@ internal static class MacAppState
         "betterdiscord" => File.Exists(Platform.BetterDiscordAsarPath),
         _               => true, // "none" is always "installed"
     };
+
+    // ── BetterDiscord self-heal ("Fix it") ───────────────────────────────────
+    //
+    // BandagedBD's installer (and older PatchCord) target the app-X.Y.Z layout, but current
+    // macOS Discord loads the BARE X.Y.Z/modules/discord_desktop_core/index.js. So BBD commonly
+    // leaves BD "malformed": the asar is placed (or not) but the LIVE index.js isn't injected.
+    // We detect that and offer a one-click fix that injects the live folder (and downloads the
+    // asar if missing), after which the monitor keeps it patched.
+
+    /// <summary>
+    /// True when <paramref name="inst"/> wants BetterDiscord but the LIVE core module isn't
+    /// correctly injected (live index.js missing the require, or the betterdiscord.asar absent).
+    /// Returns false when the mod isn't BetterDiscord or the core dir can't be resolved
+    /// (Discord not installed/launched — nothing to fix yet).
+    /// </summary>
+    public static bool IsBdMalformed(Install inst)
+    {
+        if (inst.ClientMod != "betterdiscord") return false;
+        var appDir = Platform.ResolveCoreAppDir(inst);
+        if (appDir == null) return false;
+        bool healthy = BetterDiscordEngine.IsInjected(appDir)
+                       && File.Exists(Platform.BetterDiscordAsarPath);
+        return !healthy;
+    }
+
+    /// <summary>
+    /// Repair a malformed BetterDiscord install: download the asar if missing, then inject the
+    /// LIVE core folder (stopping/restarting Discord around the write, as a patch requires).
+    /// Throws if the core dir can't be resolved. Safe to call from a background thread.
+    /// </summary>
+    public static void FixBetterDiscord(Install inst)
+    {
+        var appDir = Platform.ResolveCoreAppDir(inst)
+            ?? throw new DirectoryNotFoundException(
+                $"Discord's core module folder for {inst.Name} was not found — launch Discord once first.");
+        var asar = Platform.BetterDiscordAsarPath;
+
+        if (!File.Exists(asar))
+        {
+            Log.Write($"Fix BetterDiscord: asar missing, downloading for {inst.Name}.", "INFO");
+            BetterDiscordEngine.DownloadAsar(asar);
+        }
+
+        bool wasRunning = Platform.IsRunning(inst);
+        if (wasRunning) Platform.Stop(inst);
+        BetterDiscordEngine.Inject(appDir, asar);
+        Log.Write($"Fix BetterDiscord: injected live core {appDir} for {inst.Name}.", "OK");
+        if (wasRunning) Platform.Start(inst);
+    }
 }

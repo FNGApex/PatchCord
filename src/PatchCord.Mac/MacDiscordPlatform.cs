@@ -171,23 +171,38 @@ internal sealed class MacDiscordPlatform : IDiscordPlatform
     }
 
     /// <summary>
-    /// Highest-versioned app-X.Y.Z directory under <paramref name="appSupportDir"/>
-    /// that contains a modules/ subdirectory (mirrors PatchEngine.GetLatestAppDir logic,
-    /// adapted for the macOS App-Support layout).
+    /// The version directory under <paramref name="appSupportDir"/> that holds the core module
+    /// Discord actually loads. Discord's NEW macOS/Linux updater (rolling out 2026) uses the
+    /// Windows-style WRAPPED <c>app-X.Y.Z/modules/discord_desktop_core-N/discord_desktop_core/</c>
+    /// layout; the legacy updater used the BARE <c>X.Y.Z/modules/discord_desktop_core/</c> layout.
+    /// A machine mid-migration carries BOTH — and a load-marker test proved Discord executes the
+    /// <c>app-</c> copy even when the legacy updater has written a newer <c>core.asar</c> into the
+    /// bare copy. So we accept either layout (whichever resolves a
+    /// <see cref="BetterDiscordEngine.FindCoreIndexJs"/>), order by version, and on a same-version
+    /// tie PREFER the <c>app-</c> folder — the live one the new updater maintains. Bare is used
+    /// only when no <c>app-</c> exists (a pure-legacy install). (Globbing only <c>app-*</c> was the
+    /// original blind spot; preferring bare by mtime was the over-correction — this is the fix.)
     /// </summary>
     private static DirectoryInfo? GetLatestCoreAppDir(string appSupportDir)
     {
         if (!Directory.Exists(appSupportDir)) return null;
         return new DirectoryInfo(appSupportDir)
-            .GetDirectories("app-*")
-            .Where(d => Directory.Exists(Path.Combine(d.FullName, "modules")))
-            .OrderBy(d =>
-            {
-                // "app-X.Y.Z" → parse X.Y.Z for version ordering.
-                var vStr = d.Name.Length > 4 ? d.Name[4..] : "";
-                return Version.TryParse(vStr, out var v) ? v : new Version(0, 0, 0);
-            })
-            .LastOrDefault();
+            .GetDirectories()
+            .Select(d => (dir: d, ver: ParseVersionDir(d.Name)))
+            .Where(x => x.ver != null
+                     && Directory.Exists(Path.Combine(x.dir.FullName, "modules"))
+                     && BetterDiscordEngine.FindCoreIndexJs(x.dir.FullName) != null)
+            .OrderByDescending(x => x.ver)
+            .ThenByDescending(x => x.dir.Name.StartsWith("app-", StringComparison.Ordinal)) // app- (new, live) over bare (legacy)
+            .Select(x => x.dir)
+            .FirstOrDefault();
+    }
+
+    /// <summary>"X.Y.Z" or "app-X.Y.Z" → parsed <see cref="Version"/>; null for non-version dirs.</summary>
+    private static Version? ParseVersionDir(string name)
+    {
+        var s = name.StartsWith("app-", StringComparison.Ordinal) ? name[4..] : name;
+        return Version.TryParse(s, out var v) ? v : null;
     }
 
     // ── Process control (B2.4 / B2.5 / B2.6) ─────────────────────────────────

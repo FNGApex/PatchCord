@@ -53,6 +53,10 @@ static class Program
         if (args.Contains("--mac-b5-repatch"))
             return RunB5RepatchTest();
 
+        // F1/F3/F6: bare-vs-app layout resolution + BD malformed detection + inject round-trip.
+        if (args.Contains("--mac-bdfix"))
+            return RunBdFixTest();
+
         // Any --mac-* test flag: skip single-instance check so parallel test runs
         // (or the two-pass selftest + fdatest) don't lock each other out.
         bool isMacTest = args.Any(a => a.StartsWith("--mac-", StringComparison.Ordinal));
@@ -894,6 +898,116 @@ static class Program
         // ── Summary ───────────────────────────────────────────────────────────
         Console.WriteLine();
         Console.WriteLine($"=== B3.9 FDA test results: {passed} passed, {failed} failed ===");
+        return failed == 0 ? 0 : 1;
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
+    // F1/F3/F6: builds a /tmp App-Support fixture with BOTH the bare X.Y.Z and the
+    // stale app-X.Y.Z layouts (via the PATCHCORD_APPSUPPORT_ROOT seam), then asserts
+    // resolution picks the live bare folder, malformed detection fires, and the BD
+    // inject/restore round-trip works. No network (DownloadAsar is not exercised here).
+    // ────────────────────────────────────────────────────────────────────────────
+
+    static int RunBdFixTest()
+    {
+        Console.WriteLine("=== PatchCord.Mac F (bare-layout + BD self-heal) test ===");
+        Console.WriteLine();
+        int passed = 0, failed = 0;
+
+        var root = Path.Combine(Path.GetTempPath(), $"patchcord_bdfix_{Guid.NewGuid():N}");
+        var origEnv = Environment.GetEnvironmentVariable("PATCHCORD_APPSUPPORT_ROOT");
+        try
+        {
+            // Dual layout mid-migration: live app-0.0.395 (new updater) + legacy bare 0.0.395.
+            // We deliberately make the BARE core.asar NEWER to prove the resolver still prefers
+            // app- (the folder Discord actually loads), not the freshest mtime.
+            var bareCore = Path.Combine(root, "discord", "0.0.395", "modules", "discord_desktop_core");
+            var appCore  = Path.Combine(root, "discord", "app-0.0.395", "modules",
+                                        "discord_desktop_core-1", "discord_desktop_core");
+            Directory.CreateDirectory(bareCore);
+            Directory.CreateDirectory(appCore);
+            const string vanilla = "module.exports = require('./core.asar');\n";
+            File.WriteAllText(Path.Combine(bareCore, "index.js"), vanilla);
+            File.WriteAllText(Path.Combine(appCore,  "index.js"), vanilla);
+            File.WriteAllText(Path.Combine(bareCore, "core.asar"), "bare-core");
+            File.WriteAllText(Path.Combine(appCore,  "core.asar"), "app-core");
+            var older = DateTime.UtcNow.AddDays(-5);
+            File.SetLastWriteTimeUtc(Path.Combine(appCore, "core.asar"), older);
+            File.SetLastWriteTimeUtc(Path.Combine(appCore, "index.js"), older);
+
+            Environment.SetEnvironmentVariable("PATCHCORD_APPSUPPORT_ROOT", root);
+            var platform = new MacDiscordPlatform();
+            MacAppState.SetPlatform(platform);
+            var inst = new Install
+            {
+                Name = "Discord", Branch = "Discord", Path = "/Applications/Discord.app",
+                ClientMod = "betterdiscord", Enabled = true,
+            };
+
+            // F1: resolution picks the live app- folder (new updater), not the legacy bare one.
+            {
+                var tag = "F1";
+                var dir = platform.ResolveCoreAppDir(inst);
+                Console.WriteLine($"    ResolveCoreAppDir = {dir}");
+                if (dir == null)
+                    Fail(tag, "ResolveCoreAppDir returned null", ref failed);
+                else if (dir.Contains("app-0.0.395"))
+                    Pass(tag, $"Picked the live app- folder over legacy bare (despite newer bare core.asar): {dir}", ref passed);
+                else
+                    Fail(tag, $"Picked the WRONG folder (expected app-0.0.395): {dir}", ref failed);
+            }
+
+            // F1b: FindCoreIndexJs resolves to the wrapped app- index.js.
+            {
+                var tag = "F1b";
+                var dir = platform.ResolveCoreAppDir(inst);
+                var idx = dir != null ? BetterDiscordEngine.FindCoreIndexJs(dir) : null;
+                if (idx != null && idx.Replace('\\', '/')
+                        .Contains("/app-0.0.395/modules/discord_desktop_core-1/discord_desktop_core/index.js"))
+                    Pass(tag, $"index.js resolved to the wrapped app- core: {idx}", ref passed);
+                else
+                    Fail(tag, $"index.js not the app- one: {idx ?? "(null)"}", ref failed);
+            }
+
+            // F3: malformed when live index.js is vanilla and the asar is missing.
+            {
+                var tag = "F3";
+                Console.WriteLine($"    asar present: {File.Exists(platform.BetterDiscordAsarPath)}");
+                if (MacAppState.IsBdMalformed(inst))
+                    Pass(tag, "IsBdMalformed=true (vanilla live index.js + no asar)", ref passed);
+                else
+                    Fail(tag, "IsBdMalformed=false but expected malformed", ref failed);
+            }
+
+            // F6: inject the live folder → injected + healthy + require present; restore → vanilla.
+            {
+                var tag = "F6";
+                var dir = platform.ResolveCoreAppDir(inst)!;
+                var asar = platform.BetterDiscordAsarPath;
+                Directory.CreateDirectory(Path.GetDirectoryName(asar)!);
+                File.WriteAllText(asar, "fake-bd-asar"); // stand-in so the "asar present" check passes
+                BetterDiscordEngine.Inject(dir, asar);
+                bool injected = BetterDiscordEngine.IsInjected(dir);
+                bool healthyNow = !MacAppState.IsBdMalformed(inst);
+                var idx = BetterDiscordEngine.FindCoreIndexJs(dir)!;
+                bool reqOk = File.ReadAllText(idx).Contains("betterdiscord.asar");
+                BetterDiscordEngine.Restore(dir);
+                bool restored = !BetterDiscordEngine.IsInjected(dir);
+                if (injected && healthyNow && reqOk && restored)
+                    Pass(tag, "Inject→injected+healthy+require; Restore→vanilla. Round-trip OK.", ref passed);
+                else
+                    Fail(tag, $"round-trip failed: injected={injected} healthy={healthyNow} reqOk={reqOk} restored={restored}", ref failed);
+            }
+        }
+        catch (Exception ex) { Fail("F", ex.ToString(), ref failed); }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATCHCORD_APPSUPPORT_ROOT", origEnv);
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"=== F test results: {passed} passed, {failed} failed ===");
         return failed == 0 ? 0 : 1;
     }
 
