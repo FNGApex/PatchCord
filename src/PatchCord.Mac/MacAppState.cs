@@ -61,13 +61,13 @@ internal static class MacAppState
         _cfg = AppConfig.Load(ConfigFile, () => Platform.DiscoverInstalls().ToList());
         if (isFirstRun)
         {
-            // Mac-only first-run defaults (do NOT touch Core's Windows-shared defaults):
-            //  - Discord palette to match the reference screenshots;
-            //  - BetterDiscord as the client mod — Vencord/Equicord are parked on macOS
-            //    (Rosetta), so BetterDiscord (BandagedBD) is the supported mac mod.
+            // Mac-only first-run default: Discord palette to match the reference screenshots.
+            // The client-mod default is left to Core (vencord) for Windows/macOS parity —
+            // Vencord, Equicord, OpenAsar and BetterDiscord are all first-class on macOS.
+            // (Vencord/Equicord are no longer parked: Discord ships a universal arm64 binary,
+            // so the old "Rosetta" concern doesn't apply; Layer-A bundle writes are gated by
+            // the one-time App-Management grant, handled by FdaOnboarding.)
             _cfg.Ui.Theme = "Discord";
-            _cfg.ClientMod = "betterdiscord";
-            foreach (var inst in _cfg.Installs) inst.ClientMod = "betterdiscord";
             _cfg.Save(ConfigFile);
         }
         return _cfg;
@@ -104,6 +104,125 @@ internal static class MacAppState
         "betterdiscord" => File.Exists(Platform.BetterDiscordAsarPath),
         _               => true, // "none" is always "installed"
     };
+
+    // ── Vencord / Equicord dist self-fetch ───────────────────────────────────
+    //
+    // The official Vencord/Equicord installers normally place <mod>/dist/patcher.js. When an
+    // installer can't (e.g. broken Discord detection), PatchCord fetches the dist itself — the
+    // same self-sufficiency it already has for betterdiscord.asar and OpenAsar — so the Layer-A
+    // stub's require(".../dist/patcher.js") resolves and the monitor can patch.
+
+    /// <summary>
+    /// The <c>dist</c> directory for <paramref name="mod"/> ("vencord" | "equicord"), derived from
+    /// the platform's patcher path (its parent). Throws for any other mod.
+    /// </summary>
+    public static string ModDistDir(string mod)
+    {
+        var patcher = mod switch
+        {
+            "vencord"  => Platform.VencordPatcherPath,
+            "equicord" => Platform.EquicordPatcherPath,
+            _ => throw new ArgumentException($"No dist dir for mod '{mod}'.", nameof(mod)),
+        };
+        return Path.GetDirectoryName(patcher)
+            ?? throw new InvalidOperationException($"Could not resolve dist dir for {mod} from '{patcher}'.");
+    }
+
+    /// <summary>
+    /// Download the desktop dist for <paramref name="mod"/> ("vencord" | "equicord") into its
+    /// <see cref="ModDistDir"/>, making <see cref="ModInstalled"/> return true so the monitor patches.
+    /// Network-only (no Discord stop/start); safe on a background thread. Throws on failure.
+    /// </summary>
+    public static void DownloadModDist(string mod)
+    {
+        var distDir = ModDistDir(mod);
+        Log.Write($"Fetching {mod} dist into {distDir}.", "INFO");
+        VencordEngine.DownloadDist(mod, distDir);
+    }
+
+    // ── Apply a client-mod switch (wipe current unless virgin, then install target) ──
+    //
+    // A mod switch is an explicit, confirmed, foreground operation — the caller shows a confirm box
+    // and PAUSES the monitor around it. It checks what is currently injected (from) vs the target
+    // (to): unless the bundle is virgin (nothing injected) it WIPES the current mod first, then
+    // installs the target — all inside a single Discord stop→start. Supersedes the older lazy
+    // "switch to none removes on the next tick" path.
+
+    /// <summary>
+    /// Restore the bundle to vanilla for <paramref name="inst"/>: BD <c>index.js</c> restore (Layer B,
+    /// FDA-free) and/or Vencord/Equicord <c>app.asar</c> unpatch (Layer A). No-op on a virgin install.
+    /// Assumes Discord is already stopped. Returns the list of mods wiped. Throws on a write failure.
+    /// </summary>
+    private static List<string> WipeInjected(Install inst, InstallState state, string? resources, string? appDir)
+    {
+        var wiped = new List<string>();
+        if (state.BdActive && appDir != null)
+        {
+            BetterDiscordEngine.Restore(appDir);
+            wiped.Add("BetterDiscord");
+        }
+        if (state.AsarMod is "vencord" or "equicord" && resources != null)
+        {
+            PatchEngine.Unpatch(resources);
+            wiped.Add(MonitorService.ModShort(state.AsarMod));
+        }
+        return wiped;
+    }
+
+    /// <summary>
+    /// Switch <paramref name="inst"/> to <paramref name="toMod"/> ("vencord" | "equicord" |
+    /// "betterdiscord" | "none"): fetch the target payload if missing, stop Discord, wipe whatever is
+    /// currently injected unless the bundle is already virgin, install the target, restart Discord, and
+    /// commit <c>inst.ClientMod</c>. Returns a "From → To" summary. Throws on a write failure — a
+    /// Layer-A EPERM is the App-Management gate (caller shows FDA onboarding). Safe on a background
+    /// thread; the caller pauses the monitor around it.
+    /// <para>
+    /// Wiping un-injects so the old mod no longer loads; it leaves the old mod's payload on disk
+    /// (<c>betterdiscord.asar</c> / the Vencord dist) — reversible by switching back.
+    /// </para>
+    /// </summary>
+    public static string ApplyModSwitch(Install inst, string toMod)
+    {
+        var resources = Platform.ResolveResourcesDir(inst);
+        var appDir = Platform.ResolveCoreAppDir(inst);
+        var state = GetInstallState(inst);
+        var fromInjected = state.InjectedMod;   // vencord | equicord | betterdiscord | other | none
+
+        // Fetch the target payload BEFORE stopping Discord (network; no need to be down for it).
+        if (toMod is "vencord" or "equicord" && !ModInstalled(toMod))
+            DownloadModDist(toMod);
+        else if (toMod == "betterdiscord" && !File.Exists(Platform.BetterDiscordAsarPath))
+            BetterDiscordEngine.DownloadAsar(Platform.BetterDiscordAsarPath);
+
+        bool wasRunning = Platform.IsRunning(inst);
+        if (wasRunning) Platform.Stop(inst);
+        try
+        {
+            // WIPE current mod first — unless this is a virgin (nothing-injected) install.
+            WipeInjected(inst, state, resources, appDir);
+
+            // INSTALL target (none → wipe only, nothing to install).
+            if (toMod is "vencord" or "equicord" && resources != null)
+            {
+                var patcher = toMod == "vencord" ? Platform.VencordPatcherPath : Platform.EquicordPatcherPath;
+                PatchEngine.Patch(resources, PatchEngine.BuildStubAsar(patcher));
+            }
+            else if (toMod == "betterdiscord" && appDir != null)
+            {
+                BetterDiscordEngine.Inject(appDir, Platform.BetterDiscordAsarPath);
+            }
+        }
+        finally
+        {
+            // Always restart Discord if we stopped it, even when a write threw mid-way.
+            if (wasRunning) Platform.Start(inst);
+        }
+
+        inst.ClientMod = toMod;
+        var summary = $"{MonitorService.ModShort(fromInjected)} → {MonitorService.ModShort(toMod)}";
+        Log.Write($"Mod switch applied for {inst.Name}: {summary}.", "OK");
+        return summary;
+    }
 
     // ── BetterDiscord self-heal ("Fix it") ───────────────────────────────────
     //

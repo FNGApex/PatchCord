@@ -176,6 +176,75 @@ one-time App-Management/FDA grant to the packaged signed `PatchCord.app` (B3.9 /
 
 ## Change log
 
+- 2026-06-20 — **Mod switching is now a confirmed, monitor-paused wipe-then-update.** Every client-mod
+  switch (including → "No client mod") shows a themed confirm box (`ModSwitchConfirm`, same modal style
+  as the App-Management box); only on confirm does PatchCord PAUSE the monitor and run
+  `MacAppState.ApplyModSwitch`, which checks **from** (what's actually injected) vs **to** and — unless
+  the bundle is virgin (nothing injected) — **wipes** the current mod first (BD `index.js` restore /
+  Vencord-Equicord `app.asar` unpatch), then **installs** the target (fetching its payload first if
+  missing), all inside one Discord stop→start; the monitor resumes after. Selection commits only on
+  success (Cancel changes nothing); a Layer-A EPERM routes to FDA onboarding. Wired via
+  `MainWindow.BeginModSwitch` from both the per-install row dropdown and the global Options chooser;
+  the old `RemoveMod`/`RemoveModsOnSwitchToNone` immediate-removal path was folded into this. Verified:
+  sln 3/3 green, `--mac-removetest` 2/2 (the wipe writes), `--mac-vctest` 2/2, build 0 warn. Live: the
+  signed app was rebuilt + relaunched; confirm box drives the switch.
+- 2026-06-20 — **Layer-A live patch CONFIRMED — Vencord loaded in Discord (the deferred milestone).**
+  The previously-parked real-bundle patch is done end-to-end on the dev Mac. Path: fetched the Vencord
+  dist via the new self-fetch (build e8415d7), built+signed `publish/PatchCord.app` with the persistent
+  identity (`./make-signing-cert.sh` cert "PatchCord Self-Signed"; designated requirement =
+  `com.tomgks.patchcord` + cert leaf, so the App-Management grant persists across rebuilds), selected
+  Vencord, and the signed app patched the bundle. Verified: `/Applications/Discord.app/Contents/Resources/`
+  → `_app.asar` (2656732 B original) + 221 B Vencord stub `app.asar` requiring
+  `~/Library/Application Support/Vencord/dist/patcher.js`; Discord stopped→patched→restarted; history
+  "Discord - Vencord"; **user visually confirmed the Vencord section renders in Discord → User Settings.**
+  Empirically reconfirmed the TCC gate is real (a `touch` inside the bundle Resources EPERMs from Terminal
+  but succeeds for the granted, signed PatchCord). Equicord dist also fetched (195 KB patcher) — identical
+  Layer-A mechanism, one chooser flip away. **Nothing about the macOS port remains deferred;
+  `feat/macos-port` is ready to merge.**
+- 2026-06-20 — **Active mod removal: "No client mod" now uninstalls (product-model reversal).**
+  Previously switching an install to "none" only updated config + re-armed; the injected mod was
+  removed lazily by a monitor tick, and only while monitoring was on — so a user with
+  `ClientMod=betterdiscord` + monitoring on had "no way of getting rid of" BandagedBD (the monitor
+  kept re-injecting it). Per user request, removal is now explicit and immediate: new
+  `MacAppState.RemoveMod` restores the vanilla BetterDiscord `index.js` (Layer B, FDA-free) and/or
+  `PatchEngine.Unpatch`es the Vencord/Equicord asar swap (Layer A, App-Management-gated), stopping/
+  restarting Discord around the writes; `MainWindow.RemoveModsOnSwitchToNone` runs it off-thread from
+  both switch-to-none paths (per-install row dropdown + global Options chooser), routing a Layer-A
+  EPERM to FDA onboarding. Scope: un-injects so the mod no longer loads; payload files
+  (`betterdiscord.asar` / Vencord dist) are left on disk (reversible by re-selecting the mod) — no
+  "purge files" action was requested. This reverses the earlier "install-only / no UI uninstall"
+  product note. Verified: sln 3/3 green, `--mac-removetest` 2/2 (BD→byte-exact vanilla; Vencord
+  unpatch byte-restores app.asar + DetectMod=none), `--mac-selftest` 8/8 + `--mac-b5-bdtest` 3/3
+  (no regression).
+- 2026-06-20 — **Vencord/Equicord dist self-fetch — PatchCord no longer depends on the mods' own
+  installers.** Context: Discord's 2026 macOS/Linux `app-X.Y.Z` updater broke Discord detection in
+  several mod installers (BetterDiscord GUI+CLI, BetterDiscordCTL — all Layer-B tools). PatchCord's
+  Layer-A (Vencord/Equicord) patches the FIXED bundle `Contents/Resources/app.asar`, so its *patching*
+  was never affected; but it still relied on an external installer to place `<mod>/dist/patcher.js`.
+  New `PatchCord.Core/VencordEngine` fetches that dist itself (mirrors `BetterDiscordEngine.DownloadAsar`
+  + `OpenAsarEngine`): downloads the 4-file desktop dist (`patcher.js` + the `preload.js`/`renderer.js`/
+  `renderer.css` it loads via `__dirname`, verified against the live asset) from Vencord `devbuild` /
+  Equicord `latest`, all-into-memory-then-write (no partial dist on failure). Mac wiring: the
+  mod-missing "Get Vencord/Equicord" CTA now downloads the dist (off-thread, banner, monitoring-on,
+  re-check) instead of opening a browser; falls back to the install URL on error. Copy updated
+  ("PatchCord will download it — no separate installer needed"). Files: `VencordEngine.cs` (new),
+  `MacAppState.{ModDistDir,DownloadModDist}`, `MainViewModel.MissingMod` + CTA copy,
+  `MainWindow.axaml.cs` CTA handler. Verified: sln 3/3 green, `--mac-vctest` 2/2 (Vencord 41 KB +
+  Equicord 195 KB patchers, 4/4 files non-empty, IsDistInstalled=true), `--mac-selftest` 8/8 (no
+  regression). Live real-bundle patch with the fetched dist remains FDA-gated (deferred, unchanged).
+- 2026-06-19 — **Vencord / Equicord / OpenAsar UN-PARKED at the code level (mac first-class).** Decision
+  (user): the three Layer-A surfaces are no longer parked behind BetterDiscord on macOS. The earlier park
+  rested on "Vencord uses Rosetta," but `/Applications/Discord.app` ships a **universal arm64+x86_64**
+  binary (runs native arm64) and Vencord/Equicord inject JS into the asar — no native arch is involved, so
+  that reason is retired. Change: `MacAppState.EnsureLoaded` no longer forces `ClientMod=betterdiscord` on
+  first run; the client-mod default falls through to Core's `vencord` (Windows/macOS parity), keeping only
+  the Discord-palette first-run default. The chooser, mod-missing CTA, OpenAsar toggle, FDA/App-Management
+  onboarding + launch gate already treated all three as first-class — no other code change was required.
+  Verified: `PatchCord.Mac` builds 0/0, `--mac-selftest` 8/8 (Vencord Layer-A swap round-trip on a /tmp
+  copy: DetectMod=vencord, sha256 before==after, `_app.asar` absent). **Live confirm stays DEFERRED by user
+  choice** — the real-bundle Vencord/Equicord patch + OpenAsar real install still need a mod installed on
+  the machine and the one-time App-Management grant; this entry un-parks the *code/docs*, not the hardware
+  confirm. The header status block above (real-mod load) remains accurate for that pending live step.
 - 2026-06-18 — **B5.3 CONFIRMED + product-model correction + UI defect found.** Live run of the packaged
   `PatchCord.app`: BandagedBD (BetterDiscord) was injected and **loaded in Discord** (BD section visible in
   settings) — B5.3 DONE; **B5 now fully implemented**. Two notes from the run: (1) **Product model

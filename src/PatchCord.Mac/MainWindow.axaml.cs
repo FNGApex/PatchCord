@@ -30,6 +30,12 @@ public sealed partial class MainWindow : Window
     // F5: guards the BetterDiscord "Fix it" self-heal against double-clicks / re-entrancy.
     private bool _bdFixInProgress;
 
+    // Guards the "Get Vencord/Equicord" dist self-fetch against double-clicks / re-entrancy.
+    private bool _modGetInProgress;
+
+    // Guards a confirmed mod switch (wipe+update with the monitor paused) against re-entrancy.
+    private bool _modSwitchInProgress;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -103,17 +109,62 @@ public sealed partial class MainWindow : Window
         // Refresh button
         BtnRefresh.Click += (_, _) => RefreshInstallRows();
 
-        // Mod-missing CTA (B2): opens the install page for the first missing mod.
-        // Label is set in UpdateStatusUi so it reflects the actual missing mod.
+        // Mod-missing CTA: PatchCord fetches the missing mod's dist itself (no dependence on the
+        // mod's own — possibly broken — installer). Only ever fires for vencord/equicord (the only
+        // mods ModMissingWarningVisible covers; BetterDiscord has its own "Fix it" path).
+        // On failure it falls back to opening the install page so the user isn't stuck.
         BtnGetMod.Click += (_, _) =>
         {
-            if (_vm == null) return;
-            try
+            if (_vm == null || _modGetInProgress) return;
+            var mod = _vm.MissingMod;
+            if (mod == null) return;
+
+            _modGetInProgress = true;
+            ModWarn.IsVisible = false; // hide immediately; download then re-check
+            var cfg = MacAppState.Config;
+            var label = MonitorService.ModShort(mod);
+            MacAlert.Show(cfg, $"Downloading {label}…", force: true);
+
+            // Network download — off the UI thread.
+            System.Threading.Tasks.Task.Run(() =>
             {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
-                    "open", $"\"{_vm.ModMissingGetUrl}\"") { UseShellExecute = false });
-            }
-            catch (Exception ex) { Log.Write($"Open mod URL failed: {ex.Message}", "WARN"); }
+                Exception? error = null;
+                try { MacAppState.DownloadModDist(mod); }
+                catch (Exception ex) { error = ex; Log.Write($"Download {mod} dist failed: {ex}", "ERROR"); }
+
+                Dispatcher.UIThread.Post(() =>
+                {
+                    _modGetInProgress = false;
+                    if (error != null)
+                    {
+                        MacAlert.Show(cfg,
+                            $"Couldn't download {label}: {error.Message}. Opening the install page instead…",
+                            force: true);
+                        try
+                        {
+                            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                                "open", $"\"{_vm.ModMissingGetUrl}\"") { UseShellExecute = false });
+                        }
+                        catch (Exception ex) { Log.Write($"Open mod URL fallback failed: {ex.Message}", "WARN"); }
+                    }
+                    else
+                    {
+                        // Keep patching: ensure monitoring is on so the mod stays injected across updates.
+                        if (_vm != null && !_vm.MonitoringEnabled)
+                        {
+                            _vm.MonitoringEnabled = true;
+                            _monitor?.Reset();
+                            SetMonitorTimer(true);
+                        }
+                        MacAppState.Save();
+                        MacAlert.Show(cfg,
+                            $"{label} downloaded. PatchCord will inject it and keep it patched.",
+                            force: true);
+                    }
+                    UpdateStatusUi();
+                    BuildInstallRows();
+                });
+            });
         };
 
         // F5: BetterDiscord "Fix it" — repair a malformed BD install, then keep patching.
@@ -312,6 +363,108 @@ public sealed partial class MainWindow : Window
         Log.Write($"Monitor timer started (interval={iv}s).", "INFO");
     }
 
+    /// <summary>
+    /// Begin a client-mod switch for <paramref name="installs"/> to <paramref name="toMod"/>: show a
+    /// confirm box describing the from→to change, and only on confirm PAUSE the monitor, apply the
+    /// wipe-then-update via <see cref="MacAppState.ApplyModSwitch"/> off the UI thread, then resume the
+    /// monitor and commit the selection. Cancel leaves config + the bundle untouched. A Layer-A
+    /// permission error routes to FDA onboarding (same as the monitor's patch path).
+    /// </summary>
+    private void BeginModSwitch(IReadOnlyList<Install> installs, string toMod)
+    {
+        if (_modSwitchInProgress || _modGetInProgress || _bdFixInProgress || _vm == null) return;
+        var targets = installs.Where(i => i.Enabled).ToList();
+        if (targets.Count == 0) return;
+
+        var cfg = MacAppState.Config;
+        var toL = MonitorService.ModShort(toMod);
+
+        // Determine "from" = what is actually injected (first target drives the copy when there are many).
+        var fromInjected = MacAppState.GetInstallState(targets[0]).InjectedMod;
+        var fromL = MonitorService.ModShort(fromInjected);
+        bool virginAll = targets.All(i => MacAppState.GetInstallState(i).InjectedMod == "none");
+
+        string title, body;
+        string confirmLabel = toMod == "none" ? "Remove" : "Switch";
+        string who = targets.Count == 1 ? targets[0].Name : $"{targets.Count} installs";
+        if (toMod == "none")
+        {
+            title = $"Remove {fromL}?";
+            body  = $"This removes {fromL} from {who}, restores Discord to vanilla, and restarts Discord.";
+        }
+        else if (virginAll)
+        {
+            title = $"Install {toL}?";
+            body  = $"PatchCord will set up {toL} on {who} and restart Discord."
+                  + (MacAppState.ModInstalled(toMod) ? "" : $" {toL} will be downloaded first.");
+            confirmLabel = "Install";
+        }
+        else
+        {
+            title = $"Switch to {toL}?";
+            body  = $"PatchCord will remove the current client mod ({fromL}), install {toL} on {who}, and restart Discord."
+                  + (MacAppState.ModInstalled(toMod) ? "" : $" {toL} will be downloaded first.");
+        }
+
+        ModSwitchConfirm.Show(cfg, title, body, confirmLabel, onConfirm: () =>
+        {
+            _modSwitchInProgress = true;
+            bool wasMonitoring = _vm?.MonitoringEnabled ?? false;
+            SetMonitorTimer(false); // PAUSE the background task while wiping+updating
+            MacAlert.Show(cfg, toMod == "none" ? $"Removing {fromL}…" : $"Switching to {toL}…", force: true);
+
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                var results = new List<(Install inst, string summary, Exception? err)>();
+                foreach (var inst in targets)
+                {
+                    try { results.Add((inst, MacAppState.ApplyModSwitch(inst, toMod), null)); }
+                    catch (Exception ex) { results.Add((inst, "", ex)); Log.Write($"Mod switch failed for {inst.Name}: {ex}", "ERROR"); }
+                }
+
+                Dispatcher.UIThread.Post(() =>
+                {
+                    _modSwitchInProgress = false;
+                    foreach (var (inst, summary, err) in results)
+                    {
+                        if (err != null)
+                        {
+                            if (FdaOnboarding.IsPermissionError(err) && _monitor != null)
+                                FdaOnboarding.ShowOnboarding(inst, _monitor, cfg);
+                            else
+                                MacAlert.Show(cfg, $"Couldn't switch {inst.Name}: {err.Message}", force: true);
+                        }
+                        else
+                        {
+                            cfg.AddHistory(inst.Name, summary);
+                            MacAlert.Show(cfg, $"{inst.Name}: {summary}. Discord restarted.", force: true);
+                        }
+                    }
+                    // Commit the global default to match (installs were set by ApplyModSwitch on success).
+                    if (results.Any(r => r.err == null)) cfg.ClientMod = toMod;
+                    MacAppState.Save();
+                    _monitor?.ClearAllFailed();
+                    if (wasMonitoring) SetMonitorTimer(true); // RESUME the background task
+                    // RefreshInstallRows (not BuildInstallRows) RE-COMPUTES each install's state from
+                    // disk — BuildInstallRows alone reuses the now-stale pre-switch snapshot, which is
+                    // why the row showed "nothing" until a manual Refresh.
+                    RefreshInstallRows();
+                    UpdateStatusUi();
+                    UpdateOptionsUi();
+                    // Discord was just relaunched and may not be "running" yet at this instant; the
+                    // patched badge already shows (disk state), but re-poll once after it settles so the
+                    // running indicator updates promptly instead of waiting for the next monitor tick.
+                    Avalonia.Threading.DispatcherTimer.RunOnce(() =>
+                    {
+                        if (_modSwitchInProgress) return; // a newer switch is mid-flight; let it own the UI
+                        RefreshInstallRows();
+                        UpdateStatusUi();
+                    }, TimeSpan.FromSeconds(3));
+                });
+            });
+        });
+    }
+
     // ── Tab switching ─────────────────────────────────────────────────────────
 
     private void SwitchTab(string tab)
@@ -450,11 +603,11 @@ public sealed partial class MainWindow : Window
                 },
                 onModChange: (vm, mod) =>
                 {
-                    _vm.SetInstallMod(vm, mod);
-                    _monitor?.ClearFailed(vm.Path); // re-arm patching with the new mod
-                    BuildInstallRows();             // refresh label + badge
-                    UpdateStatusUi();               // re-evaluate the mod-missing warning
-                    UpdateOptionsUi();              // B4: sync the Options client-mod selection
+                    // A switch is a confirmed, monitor-paused wipe-then-update — not an instant
+                    // config write. BeginModSwitch shows the confirm box and only commits on success.
+                    var inst = MacAppState.Config.Installs.FirstOrDefault(i => i.Path == vm.Path);
+                    if (inst != null && inst.ClientMod != mod)
+                        BeginModSwitch(new[] { inst }, mod);
                 });
             InstallList.Children.Add(row);
         }
@@ -527,10 +680,9 @@ public sealed partial class MainWindow : Window
             card.PointerPressed += (_, _) =>
             {
                 if (_vm == null) return;
-                _vm.ClientMod = capturedMod;
-                _monitor?.ClearAllFailed(); // re-arm patching after changing the mod for all installs
-                UpdateOptionsUi();
-                BuildInstallRows();
+                // Confirmed, monitor-paused wipe-then-update for all enabled installs; commits on success.
+                if (_vm.ClientMod != capturedMod)
+                    BeginModSwitch(MacAppState.Config.Installs, capturedMod);
             };
             ClientModPanel.Children.Add(card);
         }

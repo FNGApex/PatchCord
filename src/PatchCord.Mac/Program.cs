@@ -53,6 +53,14 @@ static class Program
         if (args.Contains("--mac-b5-repatch"))
             return RunB5RepatchTest();
 
+        // Vencord/Equicord dist self-fetch (no installer dependency) — downloads to /tmp, verifies.
+        if (args.Contains("--mac-vctest"))
+            return RunVencordDistTest();
+
+        // Active mod removal ("No client mod") — BD restore + Layer-A unpatch on /tmp fixtures.
+        if (args.Contains("--mac-removetest"))
+            return RunRemoveModTest();
+
         // F1/F3/F6: bare-vs-app layout resolution + BD malformed detection + inject round-trip.
         if (args.Contains("--mac-bdfix"))
             return RunBdFixTest();
@@ -1554,6 +1562,158 @@ static class Program
 
         Console.WriteLine();
         Console.WriteLine($"=== B5.4 results: {passed} passed, {failed} failed ===");
+        return failed == 0 ? 0 : 1;
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
+    // Vencord/Equicord dist self-fetch — PatchCord downloads the desktop dist itself so it
+    // does not depend on the mod's own (possibly broken) installer. Network-only; writes to a
+    // /tmp dist dir, asserts all four files land + IsDistInstalled. Never touches the real tree.
+    // ────────────────────────────────────────────────────────────────────────────
+
+    static int RunVencordDistTest()
+    {
+        Console.WriteLine("=== PatchCord.Mac Vencord/Equicord dist self-fetch test ===");
+        Console.WriteLine();
+        int passed = 0, failed = 0;
+
+        var tmpRoot = Path.Combine(Path.GetTempPath(), "patchcord_vcdist_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            foreach (var mod in new[] { "vencord", "equicord" })
+            {
+                var tag = $"VCDIST-{mod}";
+                var distDir = Path.Combine(tmpRoot, mod, "dist");
+                try
+                {
+                    // Pre-condition: nothing there yet.
+                    if (VencordEngine.IsDistInstalled(distDir))
+                    { Fail(tag, "IsDistInstalled true before download (stale /tmp?).", ref failed); continue; }
+
+                    VencordEngine.DownloadDist(mod, distDir);
+
+                    // All four files present + non-empty?
+                    var missing = VencordEngine.DistFiles
+                        .Where(f => !File.Exists(Path.Combine(distDir, f)) || new FileInfo(Path.Combine(distDir, f)).Length == 0)
+                        .ToList();
+                    var patcher = Path.Combine(distDir, "patcher.js");
+                    long patcherLen = File.Exists(patcher) ? new FileInfo(patcher).Length : 0;
+                    Console.WriteLine($"    {mod}: patcher.js={patcherLen} bytes; files={string.Join(",", VencordEngine.DistFiles)}");
+
+                    if (missing.Count > 0)
+                        Fail(tag, $"Missing/empty after download: {string.Join(", ", missing)}", ref failed);
+                    else if (!VencordEngine.IsDistInstalled(distDir))
+                        Fail(tag, "All files written but IsDistInstalled=false.", ref failed);
+                    else
+                        Pass(tag, $"{MonitorService.ModShort(mod)} dist fetched: 4/4 files non-empty, IsDistInstalled=true.", ref passed);
+                }
+                catch (Exception ex) { Fail(tag, $"download error (network needed?): {ex.Message}", ref failed); }
+            }
+        }
+        finally
+        {
+            try { if (Directory.Exists(tmpRoot)) Directory.Delete(tmpRoot, recursive: true); } catch { }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"=== Vencord/Equicord dist results: {passed} passed, {failed} failed ===");
+        return failed == 0 ? 0 : 1;
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
+    // Mod-switch wipe (switching away / to "No client mod"): proves the two writes
+    // MacAppState.ApplyModSwitch performs to wipe the current mod — BetterDiscordEngine.Restore
+    // (Layer B, vanilla index.js) and PatchEngine.Unpatch (Layer A, _app.asar → app.asar) — on
+    // /tmp fixtures. No real Discord / bundle is touched.
+    // ────────────────────────────────────────────────────────────────────────────
+
+    static int RunRemoveModTest()
+    {
+        Console.WriteLine("=== PatchCord.Mac active mod-removal test ===");
+        Console.WriteLine();
+        int passed = 0, failed = 0;
+
+        var tmpRoot = Path.Combine(Path.GetTempPath(), "patchcord_remove_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            // RM-1: BetterDiscord removal — injected app- core index.js restored to byte-exact vanilla.
+            {
+                var tag = "RM-1-betterdiscord";
+                try
+                {
+                    var coreDir = Path.Combine(tmpRoot, "app-0.0.1", "modules", "discord_desktop_core-1", "discord_desktop_core");
+                    Directory.CreateDirectory(coreDir);
+                    File.WriteAllText(Path.Combine(coreDir, "core.asar"), "stub");
+                    var idx = Path.Combine(coreDir, "index.js");
+                    var asar = "/Users/x/Library/Application Support/BetterDiscord/data/betterdiscord.asar";
+                    File.WriteAllText(idx, BetterDiscordEngine.InjectContent(asar));
+
+                    var appDir = Path.Combine(tmpRoot, "app-0.0.1");
+                    if (!BetterDiscordEngine.IsInjected(appDir))
+                    { Fail(tag, "fixture not injected before removal.", ref failed); goto afterBd; }
+
+                    BetterDiscordEngine.Restore(appDir);   // the Layer-B wipe ApplyModSwitch makes
+
+                    var after = File.ReadAllText(idx);
+                    bool gone = !BetterDiscordEngine.IsInjected(appDir);
+                    bool vanilla = after == "module.exports = require('./core.asar');\n";
+                    Console.WriteLine($"    after restore: injected={!gone}  vanilla={vanilla}");
+                    if (gone && vanilla)
+                        Pass(tag, "BD require removed; index.js byte-exact vanilla.", ref passed);
+                    else
+                        Fail(tag, $"injected-gone={gone} vanilla={vanilla} (got: {after.Trim()})", ref failed);
+                }
+                catch (Exception ex) { Fail(tag, ex.ToString(), ref failed); }
+                afterBd:;
+            }
+
+            // RM-2: Vencord removal — Layer-A unpatch on a /tmp copy of the real app.asar.
+            {
+                var tag = "RM-2-vencord-unpatch";
+                try
+                {
+                    var resources = Path.Combine(tmpRoot, "Resources");
+                    Directory.CreateDirectory(resources);
+                    var platform = new MacDiscordPlatform();
+                    var discord = platform.DiscoverInstalls().FirstOrDefault(i => i.Branch == "Discord");
+                    var realResources = discord != null ? platform.ResolveResourcesDir(discord) : null;
+                    if (realResources == null) { Fail(tag, "no real Discord app.asar to copy.", ref failed); goto afterVc; }
+                    var sha0 = Sha256File(Path.Combine(realResources, "app.asar"));
+                    File.Copy(Path.Combine(realResources, "app.asar"), Path.Combine(resources, "app.asar"), overwrite: true);
+
+                    var distDir = Path.Combine(tmpRoot, "Vencord", "dist");
+                    Directory.CreateDirectory(distDir);
+                    var patcherJs = Path.Combine(distDir, "patcher.js");
+                    File.WriteAllText(patcherJs, "module.exports = () => {};");
+                    PatchEngine.Patch(resources, PatchEngine.BuildStubAsar(patcherJs));
+
+                    bool patched = File.Exists(Path.Combine(resources, "_app.asar"))
+                                   && PatchEngine.DetectMod(resources) == "vencord";
+                    if (!patched) { Fail(tag, "fixture not vencord-patched before removal.", ref failed); goto afterVc; }
+
+                    PatchEngine.Unpatch(resources);   // the Layer-A wipe ApplyModSwitch makes
+
+                    bool bakGone = !File.Exists(Path.Combine(resources, "_app.asar"));
+                    bool restored = File.Exists(Path.Combine(resources, "app.asar"))
+                                    && Sha256File(Path.Combine(resources, "app.asar")) == sha0;
+                    bool modNone = PatchEngine.DetectMod(resources) == "none";
+                    Console.WriteLine($"    after unpatch: _app.asar-gone={bakGone}  app.asar==original={restored}  DetectMod={PatchEngine.DetectMod(resources)}");
+                    if (bakGone && restored && modNone)
+                        Pass(tag, "Vencord unpatch: _app.asar removed, app.asar byte-restored, DetectMod=none.", ref passed);
+                    else
+                        Fail(tag, $"bakGone={bakGone} restored={restored} modNone={modNone}", ref failed);
+                }
+                catch (Exception ex) { Fail(tag, ex.ToString(), ref failed); }
+                afterVc:;
+            }
+        }
+        finally
+        {
+            try { if (Directory.Exists(tmpRoot)) Directory.Delete(tmpRoot, recursive: true); } catch { }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"=== mod-removal results: {passed} passed, {failed} failed ===");
         return failed == 0 ? 0 : 1;
     }
 

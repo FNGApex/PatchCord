@@ -58,23 +58,6 @@ internal sealed class MainViewModel : INotifyPropertyChanged
         Save();
     }
 
-    /// <summary>
-    /// Set the client mod for a single install (per-install override) and save.
-    /// Mirrors the Windows shell's per-install picker — does NOT touch the global default.
-    /// </summary>
-    public void SetInstallMod(InstallRowViewModel row, string mod)
-    {
-        if (row.ClientMod == mod) return;
-        row.ClientMod = mod;   // mutates the underlying _cfg.Installs entry
-        _cfg.ClientMod = mod;  // keep the global default (and the Options selection) in sync
-        Save();
-        OnPropertyChanged(nameof(ClientMod));
-        OnPropertyChanged(nameof(ModMissingWarningVisible));
-        OnPropertyChanged(nameof(ModMissingWarningText));
-        OnPropertyChanged(nameof(ModMissingGetLabel));
-        OnPropertyChanged(nameof(ModMissingGetUrl));
-    }
-
     // ── Patch history ─────────────────────────────────────────────────────────
 
     public IReadOnlyList<PatchEvent> History => _cfg.History;
@@ -136,10 +119,13 @@ internal sealed class MainViewModel : INotifyPropertyChanged
                 _               => "~/Library/Application Support/Vencord/dist",
             };
             if (missing.Count == 1)
-                return $"{label} isn't installed yet. Run the {label} installer once (so {dir} exists) and this app will keep it injected after every Discord update.";
-            return $"Some installs use mods that aren't installed yet ({string.Join(", ", missing.Select(m => m switch { "equicord" => "Equicord", "betterdiscord" => "BetterDiscord", _ => "Vencord" }))}). Run each one's installer once so this app can keep them injected.";
+                return $"{label} isn't installed yet. Click “Get {label}” and PatchCord will download it (into {dir}) and keep it injected after every Discord update — no separate installer needed.";
+            return $"Some installs use mods that aren't installed yet ({string.Join(", ", missing.Select(m => m switch { "equicord" => "Equicord", "betterdiscord" => "BetterDiscord", _ => "Vencord" }))}). Click “Get…” and PatchCord will download each one and keep it injected.";
         }
     }
+
+    /// <summary>The first missing mod (vencord/equicord), or null. Exposed for the CTA self-fetch.</summary>
+    public string? MissingMod => FirstMissingMod();
 
     /// <summary>The first enabled install's mod that isn't installed on disk, or null.</summary>
     private string? FirstMissingMod() =>
