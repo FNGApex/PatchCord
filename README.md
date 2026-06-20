@@ -58,67 +58,85 @@ is `net10.0-windows` and the app depends on WPF and WinForms, which are Windows-
 Runnable artifacts come only from a Windows `publish.ps1` run. A `dotnet publish` on
 macOS is a compile-check only — it will not produce a usable application.
 
-## macOS (Apple Silicon)
+## macOS — Testing Guide (Apple Silicon)
 
-PatchCord runs natively on macOS (osx-arm64) and keeps your Mac's Discord patched
-with Vencord, Equicord, or BetterDiscord — re-patching automatically after Discord
-auto-updates.
+PatchCord runs natively on macOS (osx-arm64) and keeps your Mac's Discord patched with
+Vencord, Equicord, BetterDiscord, or OpenAsar — re-applying automatically after Discord
+auto-updates. This section is for testers building from the `feat/macos-port` branch.
 
-### Install (macOS)
+> **Apple Silicon only.** Intel Macs are not supported.
 
-Build from source using the [.NET 10 SDK](https://dotnet.microsoft.com/download) and
-Xcode Command Line Tools:
+### Build
+
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download) and the Xcode Command
+Line Tools (`xcode-select --install`). From the repo root:
 
 ```bash
 chmod +x publish-mac.sh
 ./publish-mac.sh
 ```
 
-This writes a self-contained `publish/PatchCord.app` (~107 MB) that requires no
-separate .NET install.
+This produces a self-contained, signed `publish/PatchCord.app` (~107 MB) — no separate
+.NET install needed. Optional but recommended: run `./make-signing-cert.sh` **once** first
+to create a stable signing identity, so the macOS permission grant (below) survives
+rebuilds. Without it the app is ad-hoc signed and you'll need to re-grant after each build.
 
-**First launch (Gatekeeper):** the app is ad-hoc signed but not notarized for
-distribution. On first run, right-click `PatchCord.app` → **Open** to bypass the
-Gatekeeper "unidentified developer" dialog. Subsequent launches open normally.
+### First launch (Gatekeeper)
 
-### Full Disk Access (required for Vencord / Equicord / OpenAsar)
+The build is self-signed and not notarized, so Gatekeeper blocks the first launch.
+Right-click `PatchCord.app` → **Open**, then confirm. After that it opens normally and
+lives in the **menu bar** (there is no Dock icon).
 
-Vencord and Equicord patch inside the signed Discord bundle
-(`Discord.app/Contents/Resources/app.asar`). macOS App Management / TCC blocks writes
-to signed app bundles from unprivileged processes — PatchCord will be prompted for
-permission the first time it attempts to patch.
+### Grant App Management (needed for Vencord / Equicord / OpenAsar)
 
-Grant the permission when the "App Management" dialog appears, or add PatchCord
-manually:
+These three patch *inside* Discord's signed app bundle
+(`Discord.app/Contents/Resources/app.asar`). macOS gates writes to a signed bundle behind
+the **App Management** permission, so the first patch attempt fails and PatchCord shows an
+onboarding dialog. Grant it once:
 
-> **System Settings → Privacy & Security → Full Disk Access → add PatchCord.app**
+> **System Settings → Privacy & Security → App Management → enable PatchCord**
 
-This is a one-time grant. BetterDiscord patches files outside the bundle
-(`~/Library/Application Support/…`) and does not require Full Disk Access.
+There is no in-app "Allow" popup for this — macOS silently blocks the write and posts a
+notification — so you must enable it in System Settings, then click **Re-check / retry** in
+PatchCord. The grant is one-time and (with a stable signing identity) persists across
+rebuilds. **BetterDiscord needs no permission** — it patches outside the bundle.
 
-### Re-patch after Discord updates
+### What to test
 
-Discord auto-updates restore the vanilla `app.asar`, removing your mod. PatchCord's
-monitor loop detects this and re-applies the patch and restarts Discord automatically —
-this is the core reason to use PatchCord over running the mod installer once.
+1. **Vencord / Equicord** — pick one in Options or the per-install row. PatchCord
+   **downloads the mod's `dist` itself** (you do *not* need the official installer), then
+   patches and restarts Discord. Confirm the **Vencord/Equicord** section appears in
+   Discord → User Settings.
+2. **OpenAsar** — toggle it on. Confirm the **Build Override** field shows up in Discord's
+   debugging info (Settings → copy version) — that field is OpenAsar's. It coexists with any
+   client mod.
+3. **BetterDiscord** — pick it (no grant needed). If its installer targeted the wrong folder
+   for your Discord build, PatchCord shows a **Fix it** button — click it to repair and inject
+   the live folder.
+4. **Switching mods** — change the selected mod. A confirm box appears; on confirm PatchCord
+   removes the current mod, installs the new one, and restarts Discord.
+5. **No client mod** — select it to uninstall the current mod (restores vanilla Discord).
+6. **Re-patch after an update** — let Discord auto-update (or quit and relaunch it); the
+   monitor should re-apply your mod and restart Discord. This is the core feature.
+7. **Run at login** — toggle **Run at startup**; PatchCord writes a LaunchAgent
+   (`~/Library/LaunchAgents/com.tomgks.patchcord.plist`) so it starts in the menu bar each login.
 
-### Run at login
+### Reporting issues
 
-Toggle **Run at startup** in the Options tab. PatchCord writes a LaunchAgent plist to
-`~/Library/LaunchAgents/com.tomgks.patchcord.plist` so it starts in the menu bar on
-every login.
+Use **Copy diagnostics** in the Options tab and paste it into your report. The log is at
+`~/Library/Application Support/PatchCord/patchcord.log`; config at
+`~/Library/Application Support/PatchCord/config.json`.
 
 ### Notes (macOS)
 
-- osx-arm64 only (Apple Silicon). Intel Macs are not supported.
-- Avalonia is the first (and only) NuGet dependency; it lives only in the macOS
-  project. The Windows shell and Core remain zero-NuGet.
-- The Windows `publish.ps1` and its output are completely unaffected by the macOS port.
-- If you just want a modded Discord without the auto-re-patch loop, the official
+- The App Management grant is tied to your local build's signing identity, so **each tester
+  grants it once** on their own machine.
+- Avalonia is the only NuGet dependency and lives only in the macOS project; the Windows
+  shell and Core stay zero-NuGet.
+- If you only want a modded Discord without the auto-re-patch loop, the official
   [Vencord](https://github.com/Vencord/Installer),
   [Equicord](https://github.com/Equicord/Installer), and
-  [BetterDiscord](https://betterdiscord.app) installers for macOS are the
-  simpler alternative.
+  [BetterDiscord](https://betterdiscord.app) macOS installers are the simpler route.
 
 ---
 
