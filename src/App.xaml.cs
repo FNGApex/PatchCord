@@ -20,6 +20,7 @@ public partial class App : System.Windows.Application
         "vencord" => System.IO.File.Exists(Platform.VencordPatcherPath),
         "equicord" => System.IO.File.Exists(Platform.EquicordPatcherPath),
         "betterdiscord" => System.IO.File.Exists(Platform.BetterDiscordAsarPath),
+        "bandagedbd" => BandagedBDEngine.HasAnySnapshot(), // re-appliable once we've snapshotted it
         _ => true, // "none"
     };
 

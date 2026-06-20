@@ -36,13 +36,13 @@ public sealed class AppConfig
 {
     [JsonPropertyName("monitoringEnabled")] public bool MonitoringEnabled { get; set; } = true;
     [JsonPropertyName("intervalSeconds")]   public int  IntervalSeconds   { get; set; } = 20;
-    [JsonPropertyName("clientMod")]         public string ClientMod       { get; set; } = "vencord"; // vencord | equicord | betterdiscord | none
+    [JsonPropertyName("clientMod")]         public string ClientMod       { get; set; } = "vencord"; // vencord | equicord | betterdiscord | bandagedbd | none
     [JsonPropertyName("openAsar")]          public bool OpenAsar          { get; set; }
     [JsonPropertyName("installs")]          public List<Install> Installs { get; set; } = new();
     [JsonPropertyName("ui")]                public UiConfig Ui            { get; set; } = new();
     [JsonPropertyName("history")]           public List<PatchEvent> History { get; set; } = new();
 
-    public static readonly List<string> ClientMods = new() { "vencord", "equicord", "betterdiscord", "none" };
+    public static readonly List<string> ClientMods = new() { "vencord", "equicord", "betterdiscord", "bandagedbd", "none" };
 
     // Known theme keys — must stay in sync with Theme.Keys in the Windows/Mac shell.
     private static readonly HashSet<string> KnownThemes = new() { "Discord", "Dark", "Light", "HighContrast" };

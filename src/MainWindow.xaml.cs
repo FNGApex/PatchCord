@@ -414,6 +414,7 @@ public partial class MainWindow : Window
     {
         "equicord" => "https://github.com/Equicord/Equicord#installing--uninstalling",
         "betterdiscord" => "https://betterdiscord.app/",
+        "bandagedbd" => "https://github.com/rauenzi/BBDInstaller/releases/latest",
         _ => "https://vencord.dev/download/",
     };
 
@@ -431,6 +432,7 @@ public partial class MainWindow : Window
         "vencord" => "Vencord",
         "equicord" => "Equicord",
         "betterdiscord" => "BetterDiscord",
+        "bandagedbd" => "BandagedBD",
         _ => "None",
     };
 
@@ -452,7 +454,7 @@ public partial class MainWindow : Window
         sb.AppendLine(System.Runtime.InteropServices.RuntimeInformation.OSDescription);
         sb.AppendLine(System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription);
         sb.AppendLine($"monitoring={(_cfg.MonitoringEnabled ? "on" : "off")}  interval={_cfg.IntervalSeconds}s  openAsar={(_cfg.OpenAsar ? "on" : "off")}  theme={_cfg.Ui.Theme}  runAtStartup={(App.Platform.RunAtLoginEnabled ? "on" : "off")}");
-        sb.AppendLine($"mods on disk: Vencord={(_monitor.ModInstalled("vencord") ? "yes" : "no")}  Equicord={(_monitor.ModInstalled("equicord") ? "yes" : "no")}  BetterDiscord={(_monitor.ModInstalled("betterdiscord") ? "yes" : "no")}");
+        sb.AppendLine($"mods on disk: Vencord={(_monitor.ModInstalled("vencord") ? "yes" : "no")}  Equicord={(_monitor.ModInstalled("equicord") ? "yes" : "no")}  BetterDiscord={(_monitor.ModInstalled("betterdiscord") ? "yes" : "no")}  BandagedBD={(App.ModInstalled("bandagedbd") ? "yes (snapshot)" : "no")}");
         sb.AppendLine();
         sb.AppendLine($"installs ({_cfg.Installs.Count}):");
         foreach (var i in _cfg.Installs)
@@ -556,6 +558,7 @@ public partial class MainWindow : Window
         ("vencord",       "Vencord",       "The original Discord client mod — adds plugins, themes and tweaks."),
         ("equicord",      "Equicord",      "A community fork of Vencord with 300+ extra plugins."),
         ("betterdiscord", "BetterDiscord", "The long-running client mod with a plugin/theme store. Patches Discord's core (a different method than Vencord)."),
+        ("bandagedbd",    "BandagedBD",    "Bandaged BetterDiscord, the older BD fork. Injected as an app folder; this app snapshots it and restores it after updates."),
         ("none",          "No client mod", "Don't keep any client mod injected (you can still use OpenAsar)."),
     };
 
@@ -676,6 +679,8 @@ public partial class MainWindow : Window
                 SetBadge(row.RowBadge, row.RowStatus, p.On, p.OnText, "Equicord");
             else if (st.InjectedMod == "betterdiscord")
                 SetBadge(row.RowBadge, row.RowStatus, p.On, p.OnText, "BetterDiscord");
+            else if (st.InjectedMod == "bandagedbd")
+                SetBadge(row.RowBadge, row.RowStatus, p.On, p.OnText, "BandagedBD");
             else if (st.InjectedMod == "other")
                 SetBadge(row.RowBadge, row.RowStatus, "#80848E", "#FFFFFF", "Other mod");
             else if (inst.Enabled && desired != "none" && st.Running)
@@ -766,6 +771,7 @@ public partial class MainWindow : Window
         "vencord" => "Vencord",
         "equicord" => "Equicord",
         "betterdiscord" => "BetterDiscord",
+        "bandagedbd" => "BandagedBD",
         _ => "the client mod",
     };
 

@@ -6,13 +6,16 @@ using System.Text.Json;
 namespace PatchCord;
 
 // Live state of one install. AsarMod is the app.asar-layer mod
-// (none/vencord/equicord/other); BdActive is the BetterDiscord core patch.
+// (none/vencord/equicord/other); BdActive is the BetterDiscord core patch;
+// BbdActive is the BandagedBD app-folder injection.
 public sealed record InstallState(
     bool Running, bool Patched, string? AppName, string? Resources, string? AppDir, bool Installed,
-    bool OpenAsarPresent = false, string AsarMod = "none", bool BdActive = false)
+    bool OpenAsarPresent = false, string AsarMod = "none", bool BdActive = false, bool BbdActive = false)
 {
     public string InjectedMod => AsarMod is "vencord" or "equicord" ? AsarMod
-        : BdActive ? "betterdiscord" : (AsarMod == "other" ? "other" : "none");
+        : BbdActive ? "bandagedbd"
+        : BdActive ? "betterdiscord"
+        : (AsarMod == "other" ? "other" : "none");
 }
 
 // Vencord/Equicord asar patch: rename app.asar to _app.asar, write a stub app.asar
@@ -74,7 +77,8 @@ public static class PatchEngine
         string? resourcesDir,
         string? coreAppDir,
         string? versionLabel,
-        bool checkOpenAsar = false)
+        bool checkOpenAsar = false,
+        bool bbdActive = false)   // Layer C (BandagedBD app folder) — platform supplies it; mac no-ops to false.
     {
         bool patched = false, openAsar = false, bd = false;
         string asarMod = "none";
@@ -86,10 +90,13 @@ public static class PatchEngine
             bd = BetterDiscordEngine.IsInjected(coreAppDir!);
             if (checkOpenAsar) openAsar = OpenAsarEngine.IsInstalled(resourcesDir!);
         }
-        return new InstallState(running, patched, versionLabel, resourcesDir, coreAppDir, installed, openAsar, asarMod, bd);
+        return new InstallState(running, patched, versionLabel, resourcesDir, coreAppDir, installed, openAsar, asarMod, bd, bbdActive);
     }
 
     // Which mod the current stub points at: none / vencord / equicord / other.
+    // Byte-scan of the tiny stub: the require path names the dist folder (Equicord / Vencord).
+    // (Core stays platform-neutral — the upstream "read the pointed-to patcher.js" refinement used
+    // the Windows App class and can't live here; PatchCord always writes the correct folder anyway.)
     public static string DetectMod(string resourcesDir)
     {
         var appAsar = Path.Combine(resourcesDir, "app.asar");

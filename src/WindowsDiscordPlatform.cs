@@ -89,6 +89,30 @@ internal sealed class WindowsDiscordPlatform : IDiscordPlatform
             .LastOrDefault();
     }
 
+    // ── BandagedBD (Layer C) ─────────────────────────────────────────────────────
+    // Delegates to BandagedBDEngine, which snapshots/restores the resources/app folder.
+
+    public bool BandagedBdInjected(Install inst)
+        => ResolveResourcesDir(inst) is { } r && BandagedBDEngine.IsInjected(r);
+
+    public bool BandagedBdHasSnapshot(Install inst)
+        => BandagedBDEngine.HasSnapshot(inst.Path);
+
+    public void BandagedBdSnapshot(Install inst)
+    {
+        if (ResolveResourcesDir(inst) is { } r) BandagedBDEngine.CaptureSnapshot(r, inst.Path);
+    }
+
+    public void BandagedBdRestore(Install inst)
+    {
+        if (ResolveResourcesDir(inst) is { } r) BandagedBDEngine.Restore(r, inst.Path);
+    }
+
+    public void BandagedBdRemove(Install inst)
+    {
+        if (ResolveResourcesDir(inst) is { } r) BandagedBDEngine.Remove(r);
+    }
+
     // ── Process control ────────────────────────────────────────────────────────
 
     public bool IsRunning(Install inst)

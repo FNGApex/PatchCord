@@ -23,7 +23,7 @@ OUT_DIR="$SCRIPT_DIR/publish"
 APP_DIR="$OUT_DIR/PatchCord.app"
 BUNDLE_NAME="PatchCord"
 BUNDLE_ID="com.tomgks.patchcord"
-VERSION="1.7.1"
+VERSION="1.8.1"
 MIN_MACOS="13.0"
 
 # ── Locate dotnet ─────────────────────────────────────────────────────────────

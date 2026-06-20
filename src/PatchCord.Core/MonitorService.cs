@@ -94,7 +94,8 @@ public sealed class MonitorService
         var resourcesDir = _platform.ResolveResourcesDir(inst);
         var coreAppDir = _platform.ResolveCoreAppDir(inst);
         var versionLabel = _platform.AppVersionLabel(inst);
-        return PatchEngine.GetState(running, resourcesDir, coreAppDir, versionLabel, checkOpenAsar);
+        bool bbd = _platform.BandagedBdInjected(inst); // Layer C — false on macOS
+        return PatchEngine.GetState(running, resourcesDir, coreAppDir, versionLabel, checkOpenAsar, bbd);
     }
 
     /// <summary>
@@ -117,6 +118,7 @@ public sealed class MonitorService
         "vencord"       => "Vencord",
         "equicord"      => "Equicord",
         "betterdiscord" => "BetterDiscord",
+        "bandagedbd"    => "BandagedBD",
         _               => "the client mod",
     };
 
@@ -129,6 +131,7 @@ public sealed class MonitorService
         "vencord"       => "Vencord",
         "equicord"      => "Equicord",
         "betterdiscord" => "BetterDiscord",
+        "bandagedbd"    => "BandagedBD",
         _               => "None",
     };
 
@@ -152,23 +155,32 @@ public sealed class MonitorService
     {
         bool wantOpenAsar = cfg.OpenAsar;
         var states = new Dictionary<string, InstallState>();
-        var candidates = new List<(Install inst, string desiredAsar, bool desiredBD, bool needOpenAsar, bool asarChange, bool bdChange)>();
+        var candidates = new List<(Install inst, string desiredAsar, bool desiredBD, bool desiredBBD, bool needOpenAsar, bool asarChange, bool bdChange, bool bbdChange)>();
         foreach (var inst in cfg.Installs)
         {
             var st = GetInstallState(inst, wantOpenAsar);
             states[inst.Path] = st;
             var key = inst.Path;
 
+            // Layer C: keep a fresh snapshot whenever BandagedBD is present (no-op on macOS).
+            if (st.BbdActive) _platform.BandagedBdSnapshot(inst);
+
             var desired = inst.ClientMod;                              // each install picks its own mod
-            bool modReady = desired == "none" || ModInstalled(desired);
+            bool modReady = desired switch
+            {
+                "none"       => true,
+                "bandagedbd" => _platform.BandagedBdHasSnapshot(inst) || st.BbdActive,
+                _            => ModInstalled(desired),
+            };
             string desiredAsar = desired is "vencord" or "equicord" ? desired : "none";
             bool desiredBD = desired == "betterdiscord";
+            bool desiredBBD = desired == "bandagedbd";
 
             bool managed = inst.Enabled && st.Installed && st.Running && st.Resources != null && st.AppDir != null
                            && !_patchFailed.Contains(inst.Path);
             bool needOpenAsar = managed && wantOpenAsar && !st.OpenAsarPresent;
 
-            bool asarChange = false, bdChange = false;
+            bool asarChange = false, bdChange = false, bbdChange = false;
             if (managed && modReady)
             {
                 // Layer A (app.asar): only ever touch our own vencord/equicord stubs.
@@ -177,16 +189,18 @@ public sealed class MonitorService
                     : st.AsarMod != desiredAsar && st.AsarMod is "vencord" or "equicord" or "none";
                 // Layer B (BetterDiscord core patch).
                 bdChange = desiredBD ? !st.BdActive : st.BdActive;
+                // Layer C (BandagedBD app folder) — Windows only; mac no-ops keep this false.
+                bbdChange = desiredBBD ? !st.BbdActive : st.BbdActive;
             }
 
-            if (needOpenAsar || asarChange || bdChange)
+            if (needOpenAsar || asarChange || bdChange || bbdChange)
             {
-                candidates.Add((inst, desiredAsar, desiredBD, needOpenAsar, asarChange, bdChange));
+                candidates.Add((inst, desiredAsar, desiredBD, desiredBBD, needOpenAsar, asarChange, bdChange, bbdChange));
                 if (!_alerted.Contains(key))
                 {
                     _alerted.Add(key);
                     var parts = new List<string>();
-                    if (asarChange || bdChange) parts.Add(desired == "none" ? "no client mod" : ModLabel(desired));
+                    if (asarChange || bdChange || bbdChange) parts.Add(desired == "none" ? "no client mod" : ModLabel(desired));
                     if (needOpenAsar) parts.Add("OpenAsar");
                     var what = string.Join(" + ", parts);
                     if (cfg.MonitoringEnabled)
@@ -219,7 +233,7 @@ public sealed class MonitorService
             {
                 var stopped = new List<Install>();
                 var done = new List<(Install inst, string summary)>();
-                foreach (var (c, desiredAsar, desiredBD, needOpenAsar, asarChange, bdChange) in candidates)
+                foreach (var (c, desiredAsar, desiredBD, desiredBBD, needOpenAsar, asarChange, bdChange, bbdChange) in candidates)
                 {
                     try
                     {
@@ -261,6 +275,22 @@ public sealed class MonitorService
                                 BetterDiscordEngine.Restore(appDir);
                                 Log.Write($"{c.Name}: BetterDiscord removed.", "OK");
                                 changes.Add("removed BetterDiscord");
+                            }
+                        }
+                        if (bbdChange)
+                        {
+                            // Layer C (BandagedBD app folder) — Windows only; mac platform no-ops these.
+                            if (desiredBBD)
+                            {
+                                _platform.BandagedBdRestore(c);
+                                Log.Write($"{c.Name}: BandagedBD restored.", "OK");
+                                changes.Add("BandagedBD");
+                            }
+                            else
+                            {
+                                _platform.BandagedBdRemove(c);
+                                Log.Write($"{c.Name}: BandagedBD removed.", "OK");
+                                changes.Add("removed BandagedBD");
                             }
                         }
                         done.Add((c, changes.Count > 0 ? string.Join(" + ", changes) : "re-patched"));

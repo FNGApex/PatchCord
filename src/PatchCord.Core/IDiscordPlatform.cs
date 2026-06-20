@@ -101,6 +101,30 @@ public interface IDiscordPlatform
     /// </summary>
     string BetterDiscordAsarPath { get; }
 
+    // ── BandagedBD (Layer C) ─────────────────────────────────────────────────────
+    //
+    // BandagedBD is the Windows-only "app folder" BD variant: it drops a whole
+    // resources/app folder Electron loads instead of app.asar, so it is snapshotted and
+    // restored after each Discord update (BandagedBDEngine). It is a separate installer
+    // from BetterDiscord (Layer B) and is NOT supported on macOS — the Mac shell no-ops
+    // every method below (Injected/HasSnapshot → false, the rest do nothing), so the
+    // shared monitor's Layer-C path is inert on macOS.
+
+    /// <summary>True if a BandagedBD app folder is currently injected for this install.</summary>
+    bool BandagedBdInjected(Install inst);
+
+    /// <summary>True if we hold a snapshot of this install's BandagedBD app folder.</summary>
+    bool BandagedBdHasSnapshot(Install inst);
+
+    /// <summary>Snapshot the currently-injected BandagedBD app folder so it can be restored later.</summary>
+    void BandagedBdSnapshot(Install inst);
+
+    /// <summary>Restore the snapshotted BandagedBD app folder (e.g. after a Discord update wiped it).</summary>
+    void BandagedBdRestore(Install inst);
+
+    /// <summary>Remove the injected BandagedBD app folder (switching away from BandagedBD).</summary>
+    void BandagedBdRemove(Install inst);
+
     // ── Run-at-login ───────────────────────────────────────────────────────────
 
     /// <summary>

@@ -71,6 +71,16 @@ internal sealed class MacDiscordPlatform : IDiscordPlatform
     // These are evaluated per-instance so VENCORD_USER_DATA_DIR / EQUICORD_USER_DATA_DIR
     // are read at construction time. Re-use is fine for a single-run process.
 
+    // ── BandagedBD (Layer C) — not supported on macOS ─────────────────────────
+    // BandagedBD is a Windows-only "app folder" BD variant; macOS uses Layer-B index.js
+    // BetterDiscord instead. All Layer-C operations no-op so the shared monitor never acts
+    // on BandagedBD here (the mac UI never offers it either).
+    public bool BandagedBdInjected(Install inst) => false;
+    public bool BandagedBdHasSnapshot(Install inst) => false;
+    public void BandagedBdSnapshot(Install inst) { }
+    public void BandagedBdRestore(Install inst) { }
+    public void BandagedBdRemove(Install inst) { }
+
     // ── Discovery (B2.1) ──────────────────────────────────────────────────────
 
     public IReadOnlyList<Install> DiscoverInstalls()
