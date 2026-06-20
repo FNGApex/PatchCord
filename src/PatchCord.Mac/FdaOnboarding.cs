@@ -104,6 +104,62 @@ public static class FdaOnboarding
             ShowOnboardingWindow(null, null, cfg));
     }
 
+    // ── Proactive launch gate ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// True when a client mod patches the app.asar INSIDE the Discord bundle and so needs
+    /// the App-Management TCC grant. Vencord/Equicord are Layer-A bundle writes; BetterDiscord
+    /// (Layer-B, app-support index.js) and "none"/"other" are NOT bundle writes.
+    /// OpenAsar (also a bundle write) is handled at the call site via <c>cfg.OpenAsar</c>.
+    /// </summary>
+    public static bool ModNeedsBundleWrite(string? mod) =>
+        mod is "vencord" or "equicord";
+
+    // Show the launch gate at most once per process launch.
+    private static bool _gateShownThisLaunch;
+
+    /// <summary>
+    /// On launch, surface the App-Management gate when an enabled install is ready to patch
+    /// a bundle-write mod (Vencord/Equicord/OpenAsar) but isn't injected yet — i.e. the grant
+    /// is the likely blocker. Silent for BetterDiscord/none, for already-patched installs, and
+    /// for mods that aren't installed yet (the mod-missing CTA owns that case). Fires once.
+    /// </summary>
+    public static void ShowGateIfNeeded(AppConfig cfg, MonitorService monitor)
+    {
+        if (_gateShownThisLaunch) return;
+
+        foreach (var inst in cfg.Installs)
+        {
+            if (!inst.Enabled) continue;
+
+            bool needsBundle = ModNeedsBundleWrite(inst.ClientMod) || cfg.OpenAsar;
+            if (!needsBundle) continue;
+
+            // Don't double-warn when the mod simply isn't installed yet — that's the
+            // mod-missing CTA's job. (OpenAsar has no installer prerequisite.)
+            if (ModNeedsBundleWrite(inst.ClientMod) && !MacAppState.ModInstalled(inst.ClientMod))
+                continue;
+
+            InstallState state;
+            try { state = MacAppState.GetInstallState(inst, cfg.OpenAsar); }
+            catch { continue; }
+
+            // Already satisfied → the grant is working; no nag.
+            bool asarSatisfied = !ModNeedsBundleWrite(inst.ClientMod)
+                                 || state.InjectedMod == inst.ClientMod;
+            bool openAsarSatisfied = !cfg.OpenAsar || state.OpenAsarPresent;
+            if (asarSatisfied && openAsarSatisfied) continue;
+
+            _gateShownThisLaunch = true;
+            Log.Write(
+                $"App-Management launch gate shown for {inst.Name} " +
+                $"(mod={inst.ClientMod}, openAsar={cfg.OpenAsar}).",
+                "INFO");
+            ShowOnboarding(inst, monitor, cfg);
+            return;
+        }
+    }
+
     // ── Internal window builder ───────────────────────────────────────────────
 
     private static Window? _current;
@@ -124,20 +180,26 @@ public static class FdaOnboarding
         // Title
         sp.Children.Add(new TextBlock
         {
-            Text = "macOS blocked PatchCord from modifying Discord",
+            Text = "PatchCord needs App Management to patch Discord",
             FontSize = 15,
             FontWeight = FontWeight.Bold,
             Foreground = MacTheme.Brush(p.Text),
             TextWrapping = TextWrapping.Wrap,
         });
 
-        // Explanation
+        // Explanation. macOS gates writes inside Discord.app behind the App Management TCC
+        // service. There is no in-app Allow prompt — macOS only blocks the write and shows a
+        // brief notification — so the grant must be enabled once in System Settings. Because
+        // this build is stably signed, that grant then persists across PatchCord updates.
         var bodyText = install != null
-            ? $"macOS prevented PatchCord from patching {install.Name}. " +
-              "The bundle is protected by macOS App Management — you need to grant either " +
-              "\"App Management\" or \"Full Disk Access\" to PatchCord once in System Settings."
-            : "To patch Discord's bundle, PatchCord needs \"App Management\" (or \"Full Disk Access\") " +
-              "in System Settings → Privacy & Security. Grant it once and PatchCord can keep Discord patched.";
+            ? $"macOS blocked PatchCord from patching {install.Name} and showed a notification " +
+              "instead of a prompt. Discord's app bundle is protected by App Management. " +
+              "Enable PatchCord under System Settings → Privacy & Security → App Management — " +
+              "you only need to do this once; the grant persists across updates."
+            : "To patch Discord's bundle (Vencord, Equicord, or OpenAsar), enable PatchCord under " +
+              "System Settings → Privacy & Security → App Management. macOS shows no in-app prompt " +
+              "for this — grant it once and PatchCord keeps Discord patched across updates. " +
+              "(BetterDiscord needs no permission.)";
 
         sp.Children.Add(new TextBlock
         {
@@ -148,18 +210,29 @@ public static class FdaOnboarding
             MaxWidth = 480,
         });
 
-        // Open System Settings buttons
+        // Primary action: open the App Management pane (the correct, narrowest grant).
         var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
 
         var btnAppMgmt = MakeButton("Open App Management", p.Accent, p.OnAccent);
         btnAppMgmt.Click += (_, _) => OpenUrl(AppMgmtDeepLink);
         btnRow.Children.Add(btnAppMgmt);
 
-        var btnFda = MakeButton("Open Full Disk Access", p.GhostHover, p.Text);
-        btnFda.Click += (_, _) => OpenUrl(FdaDeepLink);
-        btnRow.Children.Add(btnFda);
-
         sp.Children.Add(btnRow);
+
+        // Secondary / advanced: Full Disk Access also unblocks bundle writes but is a much
+        // heavier grant, so it's demoted to a small text link rather than a primary button.
+        var btnFda = new Button
+        {
+            Content    = "Advanced: use Full Disk Access instead",
+            Background  = Avalonia.Media.Brushes.Transparent,
+            Foreground  = MacTheme.Brush(p.Sub),
+            Padding     = new Avalonia.Thickness(0, 2),
+            FontSize    = 12,
+            BorderThickness = new Avalonia.Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        btnFda.Click += (_, _) => OpenUrl(FdaDeepLink);
+        sp.Children.Add(btnFda);
 
         // Re-check / retry button (only shown when we have a failed install + monitor)
         if (install != null && monitor != null)

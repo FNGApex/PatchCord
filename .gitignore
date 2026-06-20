@@ -21,3 +21,6 @@ doc-surfaces.md
 .claude/.scratchpad/
 tmp/
 .worktrees/
+
+# macOS
+.DS_Store

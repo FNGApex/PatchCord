@@ -214,6 +214,14 @@ public sealed partial class MainWindow : Window
         // Start the monitor timer if monitoring is enabled (B3d).
         SetMonitorTimer(_vm.MonitoringEnabled);
 
+        // Phase P: App-Management launch gate. If an enabled install is ready to patch a
+        // bundle-write mod (Vencord/Equicord/OpenAsar) but isn't injected yet, the TCC grant
+        // is the likely blocker — surface it proactively. Skipped during uitest smoke runs so
+        // they auto-close cleanly. macOS shows no in-app prompt for App Management, so this gate
+        // (plus the reactive on-patch-error handler) is how the user is guided to grant it.
+        if (AutoCloseAfterMs == 0 && _monitor != null)
+            FdaOnboarding.ShowGateIfNeeded(MacAppState.Config, _monitor);
+
         // Uitest: report what rendered — MUST run after BuildInstallRows() so row count > 0.
         if (AutoCloseAfterMs > 0)
             ReportUiTestInfo();

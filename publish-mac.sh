@@ -126,17 +126,36 @@ PLIST
 echo "    Layout: $(find "$APP_DIR" | wc -l | tr -d ' ') entries"
 plutil -lint "$APP_DIR/Contents/Info.plist" && echo "    Info.plist: OK"
 
-# ── Ad-hoc code-sign ─────────────────────────────────────────────────────────
+# ── Code-sign ────────────────────────────────────────────────────────────────
+# Prefer the persistent self-signed identity (stable designated requirement → the
+# macOS "App Management" grant survives rebuilds/updates). Fall back to ad-hoc with
+# a warning when the cert is absent, so a fresh checkout still produces a runnable
+# (but non-persistent) build. Create the identity once with ./make-signing-cert.sh.
+SIGN_IDENTITY_NAME="PatchCord Self-Signed"
 echo ""
-echo "==> Ad-hoc signing PatchCord.app..."
-codesign -s - --deep --force "$APP_DIR"
-echo "    Signed."
+SIGN_SHA1="$(security find-identity -p codesigning 2>/dev/null \
+    | grep -F "$SIGN_IDENTITY_NAME" | head -1 | awk '{print $2}')"
+if [[ -n "$SIGN_SHA1" ]]; then
+    echo "==> Signing PatchCord.app with persistent identity '$SIGN_IDENTITY_NAME' ($SIGN_SHA1)..."
+    codesign -s "$SIGN_SHA1" --deep --force --timestamp=none "$APP_DIR"
+    echo "    Signed (App-Management grant will persist across updates)."
+else
+    echo "WARNING: persistent identity '$SIGN_IDENTITY_NAME' not found in the keychain."
+    echo "         Falling back to AD-HOC signing — any App-Management grant the user gives"
+    echo "         will evaporate on the next rebuild. Run ./make-signing-cert.sh once to fix."
+    echo "==> Ad-hoc signing PatchCord.app..."
+    codesign -s - --deep --force "$APP_DIR"
+    echo "    Ad-hoc signed."
+fi
 codesign -dv "$APP_DIR" 2>&1 | grep -E "^(Identifier|Format|CodeDirectory|Signature|Authority)" || true
+echo "    Designated requirement (TCC keys on this):"
+codesign -d -r- "$APP_DIR" 2>&1 | grep -i "designated" || true
 
 echo ""
 echo "Done -> $APP_DIR"
 echo "       ($(du -sh "$APP_DIR" | cut -f1) on disk)"
 echo ""
 echo "First-run: right-click PatchCord.app → Open to bypass Gatekeeper."
-echo "Grant Full Disk Access in System Settings → Privacy & Security → Full Disk Access"
-echo "for PatchCord to patch Vencord/Equicord mods inside the Discord bundle."
+echo "To patch Vencord/Equicord/OpenAsar inside the Discord bundle, grant PatchCord"
+echo "'App Management' in System Settings → Privacy & Security → App Management"
+echo "(BetterDiscord needs no grant). The app guides this on first patch."
